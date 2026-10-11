@@ -160,6 +160,12 @@ const MCP_CLIENT_USER_AGENTS: [RegExp, string][] = [
 	[/^openai-mcp\//i, "ChatGPT"],
 ];
 
+const MCP_RUNTIME_USER_AGENTS: [RegExp, string][] = [
+	[/^Bun\//, "Bun"],
+	[/^(?:node|undici|node-fetch)(?:\/|$)/, "Node.js"],
+	[/^python-/i, "Python"],
+];
+
 const MCP_ERROR_PREFIX = /^MCP error (-?\d+): (.*)$/s;
 
 const NUMERIC_CODE = /^-?\d+$/;
@@ -231,7 +237,11 @@ function mcpClient(clientName = "", userAgent = ""): string {
 			? MCP_CLIENT_PRODUCTS[name]
 			: undefined) ??
 		MCP_CLIENT_USER_AGENTS.find(([pattern]) => pattern.test(userAgent))?.[1] ??
-		clientName
+		(clientName ||
+			MCP_RUNTIME_USER_AGENTS.find(([pattern]) =>
+				pattern.test(userAgent)
+			)?.[1] ||
+			"")
 	);
 }
 

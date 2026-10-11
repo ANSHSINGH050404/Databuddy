@@ -1742,13 +1742,20 @@ describe("POST /mcp", () => {
 					error: { code: "rate_limited", message: "inner" },
 				})}`,
 			},
+			{ tool: "list_flags", durationMs: 41, userAgent: "Bun/1.4.3" },
+			{
+				tool: "list_flags",
+				durationMs: 43,
+				clientName: "nightly-report",
+				userAgent: "python-httpx/0.28.1",
+			},
 		]);
 		expect(res.status).toBe(202);
 		expect(mockCheckAutumnUsage).toHaveBeenCalledWith(
 			"user_1",
 			"events",
-			{ api_route: "mcp", batch_size: 18 },
-			18
+			{ api_route: "mcp", batch_size: 20 },
+			20
 		);
 		expect(mockSendBatch).toHaveBeenCalledWith("analytics-mcp-spans", [
 			expect.objectContaining({
@@ -1814,6 +1821,8 @@ describe("POST /mcp", () => {
 			}),
 			expect.objectContaining({ error: "x", error_code: "ECONNRESET" }),
 			expect.objectContaining({ error: "inner", error_code: "rate_limited" }),
+			expect.objectContaining({ tool: "list_flags", client: "Bun" }),
+			expect.objectContaining({ tool: "list_flags", client: "nightly-report" }),
 		]);
 	});
 
