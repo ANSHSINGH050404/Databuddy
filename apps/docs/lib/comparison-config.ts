@@ -131,6 +131,13 @@ export const competitors: Record<string, ComparisonData> = {
 				benefit:
 					"GA4 exports events to BigQuery. Databuddy provides analytics APIs and exports.",
 			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Google Analytics’ pricing and feature pages do not list uptime monitoring.",
+			},
 		],
 		faqs: [
 			{
@@ -246,6 +253,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: true,
 				benefit:
 					"Plausible Community Edition is open source and self-hostable. Databuddy is open source; a packaged self-host release is pending.",
+			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Plausible’s pricing and feature pages do not list uptime monitoring.",
 			},
 		],
 		faqs: [
@@ -368,6 +382,13 @@ export const competitors: Record<string, ComparisonData> = {
 				benefit:
 					"Databuddy includes 10,000 monthly events free. Commercial Fathom offers a trial.",
 			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Fathom Analytics’ pricing and feature pages do not list uptime monitoring.",
+			},
 		],
 		faqs: [
 			{
@@ -487,6 +508,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: true,
 				benefit: "PostHog includes surveys for collecting user feedback.",
 			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. PostHog’s pricing and feature pages do not list uptime monitoring.",
+			},
 		],
 		faqs: [
 			{
@@ -599,6 +627,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: true,
 				benefit:
 					"Umami Cloud exports pageviews, events, sessions, and event data.",
+			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Umami’s pricing and feature pages do not list uptime monitoring.",
 			},
 		],
 		faqs: [
@@ -725,6 +760,13 @@ export const competitors: Record<string, ComparisonData> = {
 				benefit:
 					"Databuddy is open source; a packaged self-host release is pending. Mixpanel is a hosted platform.",
 			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Mixpanel’s pricing and feature pages do not list uptime monitoring.",
+			},
 		],
 		faqs: [
 			{
@@ -850,6 +892,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: false,
 				benefit:
 					"Databuddy is open source; a packaged self-host release is pending. Amplitude is hosted.",
+			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Amplitude’s pricing and feature pages do not list uptime monitoring.",
 			},
 		],
 		faqs: [
@@ -979,6 +1028,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: true,
 				benefit: "Rybbit offers session replay.",
 			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Rybbit’s pricing and feature pages do not list uptime monitoring.",
+			},
 		],
 		faqs: [
 			{
@@ -1099,6 +1155,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: false,
 				benefit:
 					"Databuddy is open source; a packaged self-host release is pending. Vercel Web Analytics integrates with Vercel projects.",
+			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Vercel Analytics’ pricing and feature pages do not list uptime monitoring.",
 			},
 		],
 		faqs: [
@@ -1226,6 +1289,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: true,
 				benefit:
 					"Matomo offers self-hosted and managed hosting. Databuddy is open source and hosted; a packaged self-host release is pending.",
+			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Matomo’s pricing and feature pages do not list uptime monitoring.",
 			},
 		],
 		faqs: [
@@ -1478,6 +1548,13 @@ export const competitors: Record<string, ComparisonData> = {
 				competitor: false,
 				benefit:
 					"Databuddy includes 10,000 monthly events free. Pirsch offers a 30-day trial.",
+			},
+			{
+				name: "Uptime monitoring",
+				databuddy: true,
+				competitor: false,
+				benefit:
+					"Databuddy runs HTTP checks with Slack, email, and webhook alerts and public status pages on every plan. Pirsch’s pricing and feature pages do not list uptime monitoring.",
 			},
 		],
 		faqs: [
