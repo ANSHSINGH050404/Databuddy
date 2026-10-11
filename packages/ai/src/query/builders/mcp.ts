@@ -55,6 +55,7 @@ const common = {
 		"tool",
 		"error_code",
 		"server_name",
+		"server_version",
 		"environment",
 		"website_id",
 	],
@@ -187,7 +188,7 @@ export const McpBuilders = {
 		meta: {
 			...meta(
 				"MCP Clients",
-				"One row per AI client product (Claude Code, Cursor, ChatGPT, Codex...; '' when unidentified), most calls first. user_agents lists up to three of the most common user agents."
+				"One row per AI client product (Claude Code, Cursor, ChatGPT, Codex...), runtime for custom code that reports no client name (Bun, Node.js, Python), or '' when unidentified, most calls first. user_agents lists up to three of the most common user agents."
 			),
 			output_fields: [
 				{ name: "client", type: "string" },
@@ -214,6 +215,40 @@ export const McpBuilders = {
 				WHERE ${inRange(ctx)}
 				GROUP BY client
 				ORDER BY calls DESC
+				LIMIT {limit:UInt32}
+			`,
+			params: params(ctx),
+		}),
+		...common,
+	},
+
+	mcp_versions: {
+		meta: {
+			...meta(
+				"MCP Server Versions",
+				"One row per server version ('' when the server reported none), newest first by its first call in the period, so a release's error rate and latency can be compared with the one before it. servers lists the server names that reported the version."
+			),
+			output_fields: [
+				{ name: "server_version", type: "string" },
+				...CALL_STAT_FIELDS,
+				{ name: "servers", type: "json" },
+				{ name: "first_seen", type: "datetime" },
+				{ name: "last_seen", type: "datetime" },
+			],
+			default_visualization: "table",
+		},
+		customSql: (ctx) => ({
+			sql: `
+				SELECT
+					server_version,
+					${CALL_STATS},
+					groupUniqArrayIf(3)(server_name, server_name != '') AS servers,
+					min(timestamp) AS first_seen,
+					max(timestamp) AS last_seen
+				FROM ${Analytics.mcp_spans}
+				WHERE ${inRange(ctx)}
+				GROUP BY server_version
+				ORDER BY first_seen DESC
 				LIMIT {limit:UInt32}
 			`,
 			params: params(ctx),

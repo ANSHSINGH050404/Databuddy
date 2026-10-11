@@ -144,6 +144,8 @@ export async function handleDatabuddyMcpRequest(
 			beforeSend: (call) => ({
 				...call,
 				clientName: call.clientName ?? options.clientName,
+				serverVersion:
+					process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? call.serverVersion,
 			}),
 		});
 	}
