@@ -41,6 +41,7 @@ import { DateRangePicker } from "@/components/date-range-picker";
 import { AiProductIcon } from "@/components/icon";
 import { TopBar } from "@/components/layout/top-bar";
 import { useOrganizationsContext } from "@/components/providers/organizations-provider";
+import { McpSetupSheet } from "@/components/organizations/mcp-setup-sheet";
 import { List } from "@/components/ui/composables/list";
 import {
 	CodingAgentButtons,
@@ -99,6 +100,15 @@ interface ClientRow {
 	versions: string[];
 }
 
+interface VersionRow {
+	calls: number;
+	error_rate: number;
+	first_seen: string;
+	p95_ms: number;
+	server_version: string;
+	servers: string[];
+}
+
 interface ErrorRow {
 	clients: string[];
 	error_code: string;
@@ -116,6 +126,7 @@ const FILTERS = {
 	client: parseAsString,
 	tool: parseAsString,
 	server_name: parseAsString,
+	server_version: parseAsString,
 	environment: parseAsString,
 	website_id: parseAsString,
 };
@@ -422,6 +433,7 @@ function Setup({ organizationId }: { organizationId?: string }) {
 	const [hasCopied, setHasCopied] = useState(false);
 	const [promptAgent, setPromptAgent] = useState<string | null>(null);
 	const [isManualOpen, setIsManualOpen] = useState(false);
+	const [isConnectOpen, setIsConnectOpen] = useState(false);
 
 	const copy = async (id: string, text: string, method: "ai" | "manual") => {
 		try {
@@ -458,7 +470,7 @@ function Setup({ organizationId }: { organizationId?: string }) {
 
 	return (
 		<div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 lg:py-10">
-			<div className="mb-4 flex items-center justify-between gap-3">
+			<div className="mb-1 flex items-center justify-between gap-3">
 				<h2 className="font-semibold text-xl">Set up MCP Analytics</h2>
 				<Button asChild size="sm" variant="ghost">
 					<a
@@ -471,6 +483,32 @@ function Setup({ organizationId }: { organizationId?: string }) {
 					</a>
 				</Button>
 			</div>
+			<p className="mb-4 text-pretty text-muted-foreground text-sm">
+				For the MCP servers you build: see which tools AI clients call, how long
+				each call takes and why calls fail.
+			</p>
+			{organizationId ? (
+				<div className="mb-4 flex flex-col gap-3 rounded-lg border border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+					<p className="text-pretty text-sm">
+						Want to ask Databuddy about your analytics from Claude or Cursor
+						instead? Connect your assistant to Databuddy.
+					</p>
+					<Button
+						className="shrink-0 self-start sm:self-auto"
+						onClick={() => setIsConnectOpen(true)}
+						size="sm"
+						variant="secondary"
+					>
+						<PlugIcon className="size-3.5" />
+						Connect assistant
+					</Button>
+					<McpSetupSheet
+						onOpenChangeAction={setIsConnectOpen}
+						open={isConnectOpen}
+						organizationId={organizationId}
+					/>
+				</div>
+			) : null}
 			<Card className="gap-0 py-0">
 				<Card.Header className="gap-3 border-border border-b bg-card px-5 py-4">
 					<Card.Title>Your first tool call, in three steps</Card.Title>
@@ -703,6 +741,12 @@ function McpAnalytics({ organizationId }: { organizationId?: string }) {
 				parameters: ["mcp_clients"],
 				filters: filters.filter((filter) => filter.field !== "client"),
 			},
+			{
+				id: "versions",
+				parameters: ["mcp_versions"],
+				filters: filters.filter((filter) => filter.field !== "server_version"),
+				limit: 20,
+			},
 			{ id: "errors", parameters: ["mcp_errors"], filters, limit: 20 },
 		],
 		{
@@ -722,6 +766,7 @@ function McpAnalytics({ organizationId }: { organizationId?: string }) {
 	const series: SeriesRow[] = getDataForQuery("series", "mcp_calls_series");
 	const tools: ToolRow[] = getDataForQuery("tools", "mcp_tools");
 	const clients: ClientRow[] = getDataForQuery("clients", "mcp_clients");
+	const versions: VersionRow[] = getDataForQuery("versions", "mcp_versions");
 	const errors: ErrorRow[] = getDataForQuery("errors", "mcp_errors");
 
 	const hasLoadError = !(
@@ -810,7 +855,9 @@ function McpAnalytics({ organizationId }: { organizationId?: string }) {
 						isPlaceholderData && "opacity-60"
 					)}
 				>
-					{selected.client === null && selected.tool === null ? null : (
+					{selected.client === null &&
+					selected.tool === null &&
+					selected.server_version === null ? null : (
 						<div className="flex flex-wrap items-center gap-2">
 							{selected.client === null ? null : (
 								<FocusChip
@@ -827,6 +874,16 @@ function McpAnalytics({ organizationId }: { organizationId?: string }) {
 									onClear={() => setSelected({ tool: null })}
 								>
 									<span className="font-mono">{selected.tool}</span>
+								</FocusChip>
+							)}
+							{selected.server_version === null ? null : (
+								<FocusChip
+									label={`${selected.server_version || "No version"}, show all versions`}
+									onClear={() => setSelected({ server_version: null })}
+								>
+									<span className="font-mono">
+										{selected.server_version || "No version"}
+									</span>
 								</FocusChip>
 							)}
 						</div>
@@ -969,7 +1026,7 @@ function McpAnalytics({ organizationId }: { organizationId?: string }) {
 
 					<div className="grid gap-4 lg:grid-cols-2">
 						<Panel
-							description="Which AI clients use your servers. Select one to see only its calls."
+							description="Which AI clients and scripts call your servers. Select one to see only its calls."
 							empty={clients.length === 0 && "No clients in this period."}
 							isError={hasFailed("clients")}
 							isLoading={isPending}
@@ -1026,98 +1083,152 @@ function McpAnalytics({ organizationId }: { organizationId?: string }) {
 						</Panel>
 
 						<Panel
-							description="Why calls fail, by tool and error code. Select one to see its most common messages."
-							empty={errors.length === 0 && "No failed calls in this period."}
-							isError={hasFailed("errors")}
+							description="Each version of your servers, newest first, so you can tell whether a release changed failures or speed. Select one to see only its calls."
+							empty={versions.length === 0 && "No calls in this period."}
+							isError={hasFailed("versions")}
 							isLoading={isPending}
-							title="Errors"
+							title="Releases"
 						>
-							{errors.map((row) => {
-								const key = `${row.tool}:${row.error_code}:${row.error_code ? "" : row.message}`;
-								const isOpen = openError === key;
+							{versions.map((row) => {
+								const isSelected =
+									selected.server_version === row.server_version;
 								return (
-									<div
-										className="border-border/80 border-b last:border-b-0"
-										key={key}
+									<RowButton
+										isSelected={isSelected}
+										key={row.server_version}
+										onClick={() =>
+											setSelected({
+												server_version: isSelected ? null : row.server_version,
+											})
+										}
 									>
-										<RowButton
-											align="start"
-											aria-expanded={isOpen}
-											className={cn("border-b-0", isOpen && "pb-1")}
-											density="compact"
-											onClick={() => setOpenError(isOpen ? null : key)}
-										>
-											<List.Cell className="flex-col items-start gap-1" grow>
-												<span className="flex min-w-0 max-w-full items-center gap-2">
-													<span className="truncate font-mono text-xs">
-														{row.tool}
-													</span>
-													{row.error_code ? (
-														<Badge
-															className="font-mono"
-															size="sm"
-															variant="muted"
-														>
-															{row.error_code}
-														</Badge>
-													) : null}
-												</span>
-												{isOpen ? null : (
-													<>
-														<span className="wrap-anywhere line-clamp-2 text-muted-foreground text-xs">
-															{row.message || "No message"}
-														</span>
-														{row.messages > 1 ? (
-															<span className="text-muted-foreground text-xs">
-																{formatCount(row.messages - 1, "other message")}
-															</span>
-														) : null}
-													</>
-												)}
-											</List.Cell>
-											<List.Cell
-												align="end"
-												className="w-24 flex-col items-end"
-											>
-												<span className="font-medium text-sm tabular-nums">
-													{formatNumber(row.occurrences)}×
-												</span>
-												<span className="text-muted-foreground text-xs">
-													{fromNow(row.last_seen)}
-												</span>
-											</List.Cell>
-										</RowButton>
-										{isOpen ? (
-											<div className="flex flex-col gap-2 px-3 pb-3 text-muted-foreground text-xs sm:px-4">
-												<p className="wrap-anywhere">
-													{row.message || "No message"}
+										<List.Cell grow>
+											<div className="min-w-0">
+												<p className="truncate font-mono text-sm">
+													{row.server_version || "No version"}
 												</p>
-												{row.samples
-													.filter((sample) => sample !== row.message)
-													.map((sample) => (
-														<p
-															className="wrap-anywhere border-border border-l-2 pl-2"
-															key={sample}
-														>
-															{sample || "No message"}
-														</p>
-													))}
-												<div className="flex flex-wrap items-center gap-1.5">
-													{row.clients.map((name) => (
-														<ClientIcon client={name} key={name} size={14} />
-													))}
-													First seen {fromNow(row.first_seen)}
-													{row.sessions > 0
-														? `, ${formatCount(row.sessions, "session")}`
+												<p className="truncate text-muted-foreground text-xs">
+													First call {fromNow(row.first_seen)}
+													{(facets?.servers.length ?? 0) > 1
+														? `, ${row.servers.join(", ")}`
 														: null}
-												</div>
+												</p>
 											</div>
-										) : null}
-									</div>
+										</List.Cell>
+										<List.Cell align="end" className="w-24 flex-col items-end">
+											<span className="font-medium text-sm tabular-nums">
+												{formatNumber(row.calls)}
+											</span>
+											<span className="text-muted-foreground text-xs">
+												calls
+											</span>
+										</List.Cell>
+										<List.Cell
+											align="end"
+											className="hidden w-24 flex-col items-end text-xs sm:flex"
+										>
+											<span className="text-muted-foreground">
+												<ErrorRate rate={row.error_rate} /> failed
+											</span>
+											<span className="text-muted-foreground tabular-nums">
+												p95 {formatMs(row.p95_ms)}
+											</span>
+										</List.Cell>
+									</RowButton>
 								);
 							})}
 						</Panel>
 					</div>
+
+					<Panel
+						description="Why calls fail, by tool and error code. Select one to see its most common messages."
+						empty={errors.length === 0 && "No failed calls in this period."}
+						isError={hasFailed("errors")}
+						isLoading={isPending}
+						title="Errors"
+					>
+						{errors.map((row) => {
+							const key = `${row.tool}:${row.error_code}:${row.error_code ? "" : row.message}`;
+							const isOpen = openError === key;
+							return (
+								<div
+									className="border-border/80 border-b last:border-b-0"
+									key={key}
+								>
+									<RowButton
+										align="start"
+										aria-expanded={isOpen}
+										className={cn("border-b-0", isOpen && "pb-1")}
+										density="compact"
+										onClick={() => setOpenError(isOpen ? null : key)}
+									>
+										<List.Cell className="flex-col items-start gap-1" grow>
+											<span className="flex min-w-0 max-w-full items-center gap-2">
+												<span className="truncate font-mono text-xs">
+													{row.tool}
+												</span>
+												{row.error_code ? (
+													<Badge
+														className="font-mono"
+														size="sm"
+														variant="muted"
+													>
+														{row.error_code}
+													</Badge>
+												) : null}
+											</span>
+											{isOpen ? null : (
+												<>
+													<span className="wrap-anywhere line-clamp-2 text-muted-foreground text-xs">
+														{row.message || "No message"}
+													</span>
+													{row.messages > 1 ? (
+														<span className="text-muted-foreground text-xs">
+															{formatCount(row.messages - 1, "other message")}
+														</span>
+													) : null}
+												</>
+											)}
+										</List.Cell>
+										<List.Cell align="end" className="w-24 flex-col items-end">
+											<span className="font-medium text-sm tabular-nums">
+												{formatNumber(row.occurrences)}×
+											</span>
+											<span className="text-muted-foreground text-xs">
+												{fromNow(row.last_seen)}
+											</span>
+										</List.Cell>
+									</RowButton>
+									{isOpen ? (
+										<div className="flex flex-col gap-2 px-3 pb-3 text-muted-foreground text-xs sm:px-4">
+											<p className="wrap-anywhere">
+												{row.message || "No message"}
+											</p>
+											{row.samples
+												.filter((sample) => sample !== row.message)
+												.map((sample) => (
+													<p
+														className="wrap-anywhere border-border border-l-2 pl-2"
+														key={sample}
+													>
+														{sample || "No message"}
+													</p>
+												))}
+											<div className="flex flex-wrap items-center gap-1.5">
+												{row.clients.map((name) => (
+													<ClientIcon client={name} key={name} size={14} />
+												))}
+												First seen {fromNow(row.first_seen)}
+												{row.sessions > 0
+													? `, ${formatCount(row.sessions, "session")}`
+													: null}
+											</div>
+										</div>
+									) : null}
+								</div>
+							);
+						})}
+					</Panel>
 				</div>
 			)}
 		</div>
