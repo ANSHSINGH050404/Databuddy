@@ -22,7 +22,7 @@ export default defineConfig({
 	],
 	dialect: "postgresql",
 	dbCredentials: {
-		url: dataUrl("DATABASE_URL") || "",
+		url: process.env.DATABASE_DIRECT_URL || dataUrl("DATABASE_URL") || "",
 	},
 	tablesFilter: ["!pg_stat_statements", "!pg_stat_statements_info"],
 });
