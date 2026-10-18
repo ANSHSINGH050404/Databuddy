@@ -463,6 +463,82 @@ export const agentEvidenceReferenceSchema = z.discriminatedUnion("source", [
 		.strict(),
 ]);
 
+const definitionDraftFields = {
+	name: insightDefinitionEditChangesSchema.shape.name.unwrap().unwrap(),
+	description: insightDefinitionEditChangesSchema.shape.description.unwrap(),
+	filters: insightDefinitionEditChangesSchema.shape.filters.unwrap().unwrap(),
+	ignoreHistoricData: z
+		.boolean()
+		.describe(
+			"Use false to include existing historical data unless the inspected purpose requires a fresh measurement."
+		),
+};
+const recommendationMetadataSchema = z
+	.strictObject({
+		name: insightDefinitionEditChangesSchema.shape.name,
+		description: insightDefinitionEditChangesSchema.shape.description,
+	})
+	.refine((changes) => Object.values(changes).some((value) => value != null), {
+		message: "A recommendation edit needs an exact name or description",
+	});
+
+export const insightRecommendationReviewSchema = z.discriminatedUnion("type", [
+	z.strictObject({
+		type: z.literal("create_goal"),
+		draft: z.strictObject({
+			...definitionDraftFields,
+			type: insightDefinitionEditChangesSchema.shape.type.unwrap().unwrap(),
+			target: insightDefinitionEditChangesSchema.shape.target.unwrap().unwrap(),
+		}),
+	}),
+	z.strictObject({
+		type: z.literal("create_funnel"),
+		draft: z.strictObject({
+			...definitionDraftFields,
+			steps: z
+				.array(
+					z.strictObject(
+						insightDefinitionEditChangesSchema.shape.steps
+							.unwrap()
+							.unwrap()
+							.element.omit({ conditions: true }).shape
+					)
+				)
+				.min(2)
+				.max(10),
+		}),
+	}),
+	...(["edit_goal", "edit_funnel"] as const).map((type) =>
+		z.strictObject({
+			type: z.literal(type),
+			definitionId: z.string().trim().min(1),
+			changes: recommendationMetadataSchema,
+		})
+	),
+]);
+
+export const insightRecommendationSchema = z.strictObject({
+	summary: z
+		.string()
+		.trim()
+		.min(1)
+		.max(500)
+		.describe(
+			"One useful optional next step, grounded in the cited evidence. Explain tracking needed when a reviewable draft is not yet supported; do not assert unmeasured results."
+		),
+	review: insightRecommendationReviewSchema
+		.nullable()
+		.describe(
+			"An evidence-backed editable goal/funnel draft or exact metadata edit, otherwise null. Never a mutation or repair lifecycle."
+		),
+	sources: z.array(agentEvidenceReferenceSchema).min(1).max(8),
+});
+
+export type InsightRecommendation = z.infer<typeof insightRecommendationSchema>;
+export type InsightRecommendationReview = z.infer<
+	typeof insightRecommendationReviewSchema
+>;
+
 export const insightWatchThresholdSchema = z
 	.object({
 		anchor: z
@@ -729,6 +805,8 @@ export const investigationOutcomeSchema = z
 		evidence: z.array(z.string().trim().min(1).max(1500)).min(1).max(2),
 		publish: z.boolean().optional(),
 		publicationBasis: insightPublicationBasisSchema.nullable().optional(),
+		// Invalid legacy recommendation shapes must not hide an otherwise readable outcome.
+		recommendation: insightRecommendationSchema.nullish().catch(undefined),
 		next: investigationNextSchema,
 	})
 	.strip()
@@ -861,6 +939,11 @@ export const agentInvestigationOutcomeSchema = z
 			"Classify the cited evidence: reliability_exposure for measured errors or performance; user_experience for a measured downstream consequence; product_outcome for a measured result of behavior with a known purpose; measurement_definition for an inspected definition or tracking-code mismatch; measurement_coverage for a measured missing or polluted population or an inspected collection defect. Event names alone do not establish purpose."
 		),
 		publicationBasis: insightPublicationBasisSchema.nullable(),
+		recommendation: insightRecommendationSchema
+			.nullish()
+			.describe(
+				"Optional useful suggestion independent of next and publication. Use only inspected current evidence for setup drafts and metadata edits; omit speculative or repetitive recommendations."
+			),
 	})
 	.superRefine((outcome, context) => {
 		const stored = investigationOutcomeSchema.safeParse(outcome);
@@ -944,6 +1027,38 @@ export const insightTimelineInvestigationSchema = z.object({
 	outcome: investigationOutcomeSchema,
 	period: weekOverWeekPeriodSchema,
 });
+
+export const insightRecommendationSavedSchema = z.object({
+	definitionType: z.enum(["goal", "funnel"]),
+	definitionId: z.string(),
+	name: z.string().nullable(),
+	savedAt: z.iso.datetime(),
+	adjusted: z.boolean(),
+	current: z.boolean(),
+	deleted: z.boolean(),
+});
+
+export const insightRecommendationItemSchema = z.object({
+	id: z.string(),
+	asOf: z.iso.datetime(),
+	createdAt: z.iso.datetime(),
+	expiresAt: z.iso.datetime(),
+	status: z.enum(["ready", "saved"]),
+	saved: insightRecommendationSavedSchema.nullable(),
+	investigationId: z.string().nullable(),
+	websiteId: z.string(),
+	websiteName: z.string().nullable(),
+	websiteDomain: z.string(),
+	signal: investigationSignalSchema,
+	title: z.string(),
+	summary: z.string(),
+	evidence: z.array(z.string()),
+	recommendation: insightRecommendationSchema,
+});
+
+export type InsightRecommendationItem = z.infer<
+	typeof insightRecommendationItemSchema
+>;
 
 export const insightTimelineReplySchema = z.object({
 	assistantText: z.string().nullable().optional(),

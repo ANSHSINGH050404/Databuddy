@@ -13,9 +13,11 @@ export function useInsightsFeed() {
 
 	const orgId = activeOrganization?.id ?? activeOrganizationId ?? undefined;
 
-	const historyInfinite = useInfiniteQuery(
-		insightQueries.historyInfinite(orgId, "open")
-	);
+	const historyInfinite = useInfiniteQuery({
+		...insightQueries.historyInfinite(orgId, "open"),
+		refetchOnWindowFocus: true,
+		refetchInterval: 30_000,
+	});
 
 	const insights =
 		historyInfinite.data?.pages.flatMap((page) => page.insights) ?? [];

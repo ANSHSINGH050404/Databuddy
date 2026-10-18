@@ -21,7 +21,7 @@ export default function InvestigationsPage() {
 				<Card.Header className="border-b bg-card">
 					<Card.Title>Open investigations</Card.Title>
 					<Card.Description className="mt-1">
-						Questions and fixes waiting for your input.
+						Questions, fixes, and checks being followed through.
 					</Card.Description>
 				</Card.Header>
 				<Card.Content className="p-0">

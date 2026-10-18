@@ -59,6 +59,8 @@ export default function InsightDetailPage() {
 
 	const { data, isLoading, isError } = useQuery({
 		...insightQueries.byId(insightId || undefined),
+		staleTime: 0,
+		refetchOnWindowFocus: true,
 		refetchInterval: (query) =>
 			query.state.data?.timeline.some(
 				(item) =>
@@ -66,7 +68,9 @@ export default function InsightDetailPage() {
 					(item.status === "queued" || item.status === "running")
 			)
 				? 2000
-				: false,
+				: query.state.data?.insight?.status === "open"
+					? 30_000
+					: false,
 	});
 
 	const insight = data?.insight ?? null;
@@ -359,10 +363,13 @@ function CaseActivity({
 				(item.status === "queued" || item.status === "running")
 		);
 	const latestReplyId = items.findLast((item) => item.kind === "reply")?.id;
-	const latestInvestigationId = items.findLast(
+	const latestInvestigation = items.findLast(
 		(item): item is InvestigationItem => item.kind === "investigation"
-	)?.id;
+	);
+	const latestInvestigationId = latestInvestigation?.id;
 	const settled = active || isResolved;
+	const answerRequested =
+		!settled && latestInvestigation?.outcome.next.type === "ask";
 	const [historyExpanded, setHistoryExpanded] = useState(false);
 	const visibleItems = settled && !historyExpanded ? items.slice(-1) : items;
 
@@ -413,10 +420,11 @@ function CaseActivity({
 
 			{canReply && (
 				<ContextReply
+					answerRequested={answerRequested}
 					disabled={active}
 					insightId={insightId}
 					onOpenChange={onReplyOpenChange}
-					open={replyOpen}
+					open={replyOpen || answerRequested}
 				/>
 			)}
 		</section>
@@ -491,14 +499,14 @@ function TimelineEntry({
 							</div>
 						)}
 						{(item.status === "queued" || item.status === "running") && (
-							<p className="flex items-center gap-2 text-muted-foreground text-xs">
+							<div className="flex items-center gap-2 text-muted-foreground text-xs">
 								<Spinner size="sm" />
 								{item.status === "queued"
 									? "Reply queued…"
 									: item.intent === "clarification"
 										? "Databuddy is answering…"
 										: "Databuddy is investigating…"}
-							</p>
+							</div>
 						)}
 						{item.status === "failed" && (
 							<div className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
@@ -531,11 +539,13 @@ function TimelineEntry({
 }
 
 function ContextReply({
+	answerRequested,
 	disabled,
 	insightId,
 	onOpenChange,
 	open,
 }: {
+	answerRequested: boolean;
 	disabled: boolean;
 	insightId: string;
 	onOpenChange: (open: boolean) => void;
@@ -559,6 +569,7 @@ function ContextReply({
 
 	return (
 		<ReplyComposer
+			answerRequested={answerRequested}
 			disabled={disabled}
 			insightId={insightId}
 			onClose={() => onOpenChange(false)}
@@ -567,10 +578,12 @@ function ContextReply({
 }
 
 function ReplyComposer({
+	answerRequested,
 	disabled,
 	insightId,
 	onClose,
 }: {
+	answerRequested: boolean;
 	disabled: boolean;
 	insightId: string;
 	onClose: () => void;
@@ -603,7 +616,13 @@ function ReplyComposer({
 		if (!trimmed) {
 			return;
 		}
-		sendReply(trimmed, "Databuddy is answering your clarification");
+		sendReply(
+			trimmed,
+			answerRequested
+				? "Investigation continuing with your answer"
+				: "Databuddy is answering your clarification",
+			answerRequested ? "analysis" : "clarification"
+		);
 	};
 	const sendReply = (
 		message: string,
@@ -634,42 +653,56 @@ function ReplyComposer({
 	return (
 		<form className="border-t px-4 py-4 sm:px-5" onSubmit={submitReply}>
 			<Field>
-				<Field.Label className="sr-only">Question</Field.Label>
+				<Field.Label className={answerRequested ? undefined : "sr-only"}>
+					{answerRequested ? "Your answer" : "Question"}
+				</Field.Label>
 				<Textarea
 					disabled={disabled}
 					maxLength={2000}
 					maxRows={8}
 					minRows={2}
 					onChange={(event) => setBody(event.target.value)}
-					placeholder="Ask about this result, or write a new question…"
+					placeholder={
+						answerRequested
+							? "Answer the question above to continue…"
+							: "Ask about this result, or write a new question…"
+					}
 					value={body}
 				/>
 				<p className="text-pretty text-muted-foreground text-xs">
-					{isSelfHosted
-						? "Ask a follow-up question or start a new investigation."
-						: "Clarifications are included. New investigations use your allowance, then cost $1 each."}
+					{answerRequested
+						? isSelfHosted
+							? "Databuddy will continue this investigation using your answer."
+							: "Continuing uses 1 investigation from your allowance, then costs $1."
+						: isSelfHosted
+							? "Ask a follow-up question or start a new investigation."
+							: "Clarifications are included. New investigations use your allowance, then cost $1 each."}
 				</p>
 				<div className="flex flex-wrap justify-end gap-2">
-					<Button
-						disabled={disabled || !body.trim() || replyMutation.isPending}
-						onClick={() =>
-							sendReply(body.trim(), "New analysis queued", "analysis")
-						}
-						size="sm"
-						type="button"
-						variant="secondary"
-					>
-						New analysis · 1 investigation
-					</Button>
-					<Button
-						disabled={replyMutation.isPending}
-						onClick={onClose}
-						size="sm"
-						type="button"
-						variant="ghost"
-					>
-						Cancel
-					</Button>
+					{!answerRequested && (
+						<>
+							<Button
+								disabled={disabled || !body.trim() || replyMutation.isPending}
+								onClick={() =>
+									sendReply(body.trim(), "New analysis queued", "analysis")
+								}
+								size="sm"
+								type="button"
+								variant="secondary"
+							>
+								New analysis · 1 investigation
+							</Button>
+							<Button
+								disabled={replyMutation.isPending}
+								onClick={onClose}
+								size="sm"
+								type="button"
+								variant="ghost"
+							>
+								Cancel
+							</Button>
+						</>
+					)}
 					<Button
 						disabled={disabled || !body.trim() || replyMutation.isPending}
 						loading={replyMutation.isPending}
@@ -677,7 +710,9 @@ function ReplyComposer({
 						type="submit"
 					>
 						<PaperPlaneIcon className="size-3.5" />
-						Send clarification
+						{answerRequested
+							? "Answer and continue · 1 investigation"
+							: "Send clarification"}
 					</Button>
 				</div>
 			</Field>

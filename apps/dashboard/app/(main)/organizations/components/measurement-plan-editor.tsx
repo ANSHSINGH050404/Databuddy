@@ -75,7 +75,9 @@ export function MeasurementPlanEditor({
 			<Card.Header>
 				<Card.Title className="text-balance">Activation and return</Card.Title>
 				<Card.Description className="text-pretty">
-					The events that mean someone got value and came back.
+					Choose the events that mean someone got value and returned. We measure
+					return among identified users who performed the activation event,
+					within seven or thirty days afterward.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content className="space-y-4">
@@ -284,6 +286,13 @@ export function MeasurementPlanEditor({
 										</DropdownMenu.RadioGroup>
 									</DropdownMenu.Content>
 								</DropdownMenu>
+								<p className="text-pretty text-muted-foreground text-xs">
+									Return means the event happened at any point within this
+									window. Activation is the first matching event in each
+									comparison period, rather than the user&apos;s first-ever
+									event. Anonymous activity and unfinished follow-up are
+									excluded from the return rate.
+								</p>
 								<Accordion defaultOpen={!!plan.namespace}>
 									<Accordion.Trigger>
 										Advanced{plan.namespace ? " · Namespace set" : ""}

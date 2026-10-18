@@ -45,6 +45,7 @@ import {
 	TrendUpIcon,
 	WarningCircleIcon,
 } from "@databuddy/ui/icons";
+import { Accordion } from "@databuddy/ui/client";
 import { toast } from "sonner";
 import { showErrorToast } from "@/lib/user-facing-error";
 import { latestRunDescription } from "./_lib/insight-run";
@@ -890,8 +891,6 @@ function InsightBriefRow({ insight }: { insight: BriefInsight }) {
 			: change !== null && change < 0
 				? TrendDownIcon
 				: LightbulbIcon;
-	const metric = insight.signal.metric;
-	const entityType = insight.signal.entity.type.replaceAll("_", " ");
 
 	return (
 		<article className="group relative flex items-start gap-3 px-5 py-5 sm:gap-4 sm:px-6">
@@ -963,29 +962,20 @@ function InsightBriefRow({ insight }: { insight: BriefInsight }) {
 							</dd>
 						</div>
 					) : null}
-					<div className="sm:col-span-2">
-						<dt className="font-semibold text-foreground/75">Evidence</dt>
-						<dd className="mt-0.5 text-muted-foreground">
-							{insight.evidence.join(" · ")}
-						</dd>
-					</div>
 				</dl>
+				{insight.evidence.length > 0 ? (
+					<Accordion className="mt-2">
+						<Accordion.Trigger className="bg-transparent px-0 text-xs">
+							Evidence
+						</Accordion.Trigger>
+						<Accordion.Content className="px-0 text-muted-foreground text-xs leading-relaxed">
+							{insight.evidence.join(" · ")}
+						</Accordion.Content>
+					</Accordion>
+				) : null}
 				<div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t pt-3 text-[11px] text-muted-foreground">
 					<span className="font-medium text-foreground/70">
 						{insight.websiteName ?? insight.websiteDomain}
-					</span>
-					<span aria-hidden className="text-muted-foreground/30">
-						&middot;
-					</span>
-					<span className="capitalize">{entityType}</span>
-					<span aria-hidden className="text-muted-foreground/30">
-						&middot;
-					</span>
-					<span className="tabular-nums">
-						{formatMetricValue(metric.current, metric.format)}
-						{metric.previous === undefined
-							? ""
-							: ` vs ${formatMetricValue(metric.previous, metric.format)}`}
 					</span>
 					<span aria-hidden className="text-muted-foreground/30">
 						&middot;
@@ -1010,25 +1000,6 @@ function InsightBriefRow({ insight }: { insight: BriefInsight }) {
 			</div>
 		</article>
 	);
-}
-
-function formatMetricValue(
-	value: number,
-	format: BriefInsight["signal"]["metric"]["format"]
-) {
-	const pretty = value.toLocaleString("en-US", {
-		maximumFractionDigits: 2,
-	});
-	if (format === "percent") {
-		return `${pretty}%`;
-	}
-	if (format === "duration_ms") {
-		return `${pretty}ms`;
-	}
-	if (format === "duration_s") {
-		return `${pretty}s`;
-	}
-	return pretty;
 }
 
 function formatComparison(period: BriefInsight["signal"]["period"]) {

@@ -248,7 +248,9 @@ export function CaseState({
 			: latest.outcome.next.type === "ask"
 				? "Needs your input"
 				: latest.outcome.next.type === "watch"
-					? "Measuring"
+					? latest.outcome.verification?.status === "failed"
+						? "Needs attention"
+						: "Measuring"
 					: recovered
 						? "Recovered"
 						: "Verified";
@@ -345,22 +347,11 @@ export function InvestigationActivity({
 				)}
 			</dl>
 
-			<Evidence
-				evidence={outcome.evidence}
-				initiallyCollapsed={collapseEvidence}
-				sourceHref={
-					outcome.next.type === "act" && !executable
-						? null
-						: (sourceLink?.href ?? null)
-				}
-			/>
-
-			<ContextUsed snapshot={outcome.contextSnapshot} />
-
 			<NextStep
 				hideAction={executable}
 				next={outcome.next}
 				sourceLink={sourceLink}
+				verificationFailed={outcome.verification?.status === "failed"}
 			/>
 
 			{insightId && execution?.operation && definitionType ? (
@@ -374,6 +365,18 @@ export function InvestigationActivity({
 					/>
 				</div>
 			) : null}
+
+			<Evidence
+				evidence={outcome.evidence}
+				initiallyCollapsed={collapseEvidence}
+				sourceHref={
+					outcome.next.type === "act" && !executable
+						? null
+						: (sourceLink?.href ?? null)
+				}
+			/>
+
+			<ContextUsed snapshot={outcome.contextSnapshot} />
 		</div>
 	);
 }
@@ -436,22 +439,49 @@ function Evidence({
 	);
 }
 
-function investigationSourceLink(
-	item: InvestigationItem,
+export function investigationSourceLink(
+	item: Pick<InvestigationItem, "entity" | "period">,
 	websiteId: string
 ): { href: string; label: string } | null {
 	const base = `/websites/${encodeURIComponent(websiteId)}`;
+	const params = new URLSearchParams({
+		startDate: item.period.current.from,
+		endDate: item.period.current.to,
+	});
 	switch (item.entity.type) {
 		case "event":
 			return {
-				href: `${base}/events/${encodeURIComponent(item.entity.id)}`,
+				href: `${base}/events/${encodeURIComponent(item.entity.id)}?${params}`,
 				label: "Open event",
 			};
 		case "funnel":
-		case "funnel_step":
-			return { href: `${base}/funnels`, label: "Open funnel" };
+		case "funnel_step": {
+			let funnelId: string | null = item.entity.id;
+			if (item.entity.type === "funnel_step") {
+				const separator = item.entity.id.lastIndexOf(":step:");
+				const step = item.entity.id.slice(separator + 6);
+				funnelId =
+					separator > 0 &&
+					Number.isSafeInteger(Number(step)) &&
+					Number(step) >= 2 &&
+					String(Number(step)) === step
+						? item.entity.id.slice(0, separator)
+						: null;
+			}
+			if (funnelId) {
+				params.set("funnelId", funnelId);
+			}
+			return {
+				href: `${base}/funnels?${params}${funnelId ? `#${encodeURIComponent(`funnel-${funnelId}`)}` : ""}`,
+				label: "Open funnel",
+			};
+		}
 		case "goal":
-			return { href: `${base}/goals`, label: "Open goal" };
+			params.set("goalId", item.entity.id);
+			return {
+				href: `${base}/goals?${params}#${encodeURIComponent(`goal-${item.entity.id}`)}`,
+				label: "Open goal",
+			};
 		default:
 			return null;
 	}
@@ -461,12 +491,14 @@ function NextStep({
 	hideAction,
 	next,
 	sourceLink,
+	verificationFailed,
 }: {
 	hideAction: boolean;
 	next: InvestigationNext;
 	sourceLink: { href: string; label: string } | null;
+	verificationFailed: boolean;
 }) {
-	const copy = nextCopy(next, { executable: hideAction });
+	const copy = nextCopy(next, { executable: hideAction, verificationFailed });
 	return (
 		<div className="rounded-md border border-primary/15 bg-primary/5 px-3 py-3">
 			<p className="font-medium text-muted-foreground text-xs">{copy.label}</p>
@@ -502,7 +534,7 @@ function formatPeriod(period: { from: string; to: string }): string {
 
 function nextCopy(
 	next: InvestigationNext,
-	options?: { executable?: boolean }
+	options?: { executable?: boolean; verificationFailed?: boolean }
 ): {
 	body: string;
 	detail?: string;
@@ -526,7 +558,7 @@ function nextCopy(
 			return {
 				body: next.escalation,
 				detail: scheduledRecheck(next),
-				label: "Measuring",
+				label: options?.verificationFailed ? "Needs attention" : "Measuring",
 			};
 		case "resolve":
 			return { body: next.reason, label: "Conclusion" };
