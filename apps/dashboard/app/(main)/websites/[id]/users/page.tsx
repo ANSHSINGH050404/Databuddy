@@ -48,7 +48,6 @@ import { generateProfileName } from "./[userId]/_components/generate-profile-nam
 import { type ProfileSort, useProfilesData } from "./use-users";
 import { useEventNames } from "./use-event-names";
 import {
-	Badge,
 	Button,
 	EmptyState,
 	Input,
@@ -92,16 +91,16 @@ const PRESETS: Record<PresetKey, PresetConfig> = {
 		filters: [{ field: "profile_id", operator: "ne", value: "" }],
 	},
 	power: {
-		label: "Power users",
+		label: "3+ sessions",
 		filters: [{ field: "session_count", operator: "not_in", value: [1, 2] }],
 		sort: { field: "session_count", order: "desc" },
 	},
 	new: {
-		label: "New",
+		label: "1 session",
 		filters: [{ field: "session_count", operator: "eq", value: 1 }],
 	},
 	returning: {
-		label: "Returning",
+		label: "2+ sessions",
 		filters: [{ field: "session_count", operator: "ne", value: 1 }],
 	},
 };
@@ -547,20 +546,6 @@ export default function UsersPage() {
 					);
 				},
 				size: 90,
-			},
-			{
-				id: "type",
-				header: "Type",
-				cell: ({ row }) => {
-					const sessionCount = row.original.session_count ?? 0;
-					const isReturning = sessionCount > 1;
-					return (
-						<Badge variant={isReturning ? "default" : "muted"}>
-							{isReturning ? "Returning" : "New"}
-						</Badge>
-					);
-				},
-				size: 70,
 			},
 			{
 				id: "last_visit",

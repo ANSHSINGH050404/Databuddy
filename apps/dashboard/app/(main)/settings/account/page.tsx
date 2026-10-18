@@ -670,6 +670,7 @@ export default function AccountSettingsPage() {
 							title="Two-factor authentication"
 						>
 							<Button
+								disabled={isLoading}
 								onClick={() => setShowTwoFactorDialog(true)}
 								size="sm"
 								variant="secondary"
