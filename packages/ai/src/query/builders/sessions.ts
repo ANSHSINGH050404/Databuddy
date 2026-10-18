@@ -2,6 +2,14 @@ import { Analytics } from "../../types/tables";
 import { appendFilterClause } from "../simple-builder";
 import type { SimpleQueryConfig } from "../types";
 
+export const SESSION_ACTIVITY_FIELDS = `
+	countIf(event_name = 'screen_view') as page_views,
+	countIf(event_name NOT IN ('screen_view', 'page_exit'))
+		+ countIf(event_name = 'page_exit' AND ifNull(interaction_count, 0) > 0) as engagement_events`;
+
+export const SESSION_BOUNCE_CONDITION =
+	"page_views = 1 AND ifNull(duration, 0) < 10 AND engagement_events = 0";
+
 export const SessionsBuilders = {
 	session_metrics: {
 		meta: {
@@ -27,8 +35,7 @@ export const SessionsBuilders = {
 					SELECT
 						session_id,
 						count() as total_events,
-						countIf(event_name = 'screen_view') as page_views,
-						countIf(event_name NOT IN ('screen_view', 'page_exit')) as engagement_events,
+						${SESSION_ACTIVITY_FIELDS},
 						sumIf(ifNull(time_on_page, 0), event_name = 'page_exit' AND ifNull(time_on_page, 0) > 0) as duration
 					FROM ${Analytics.events}
 					WHERE
@@ -42,7 +49,7 @@ export const SessionsBuilders = {
 				SELECT
 					countIf(page_views >= 1) as total_sessions,
 					round(avgIf(duration, page_views >= 1 AND duration > 0), 2) as avg_session_duration,
-					round((countIf(page_views = 1 AND duration < 10 AND engagement_events = 0) / nullIf(countIf(page_views >= 1), 0)) * 100, 2) as bounce_rate,
+						round((countIf(${SESSION_BOUNCE_CONDITION}) / nullIf(countIf(page_views >= 1), 0)) * 100, 2) as bounce_rate,
 					sum(total_events) as total_events
 				FROM session_rollup
 			`,

@@ -1,6 +1,23 @@
 import { Analytics } from "../../types/tables";
 import { appendFilterClause } from "../simple-builder";
-import type { SimpleQueryConfig } from "../types";
+import type { CustomSqlContext, SimpleQueryConfig } from "../types";
+import { SESSION_ACTIVITY_FIELDS, SESSION_BOUNCE_CONDITION } from "./sessions";
+
+function summaryBaseEvents(ctx: CustomSqlContext): string {
+	return `${ctx.helpers ? `${ctx.helpers.sessionAttributionCTE},` : ""}
+		base_events AS (
+			SELECT e.session_id, e.anonymous_id, e.event_name,
+				toTimeZone(e.time, {timezone:String}) as normalized_time,
+				e.time_on_page, e.interaction_count
+			FROM ${Analytics.events} e
+			${ctx.helpers?.sessionAttributionJoin ?? ""}
+			WHERE e.client_id = {websiteId:String}
+				AND e.time >= toDateTime({startDate:String})
+				AND e.time <= toDateTime(concat({endDate:String}, ' 23:59:59'))
+				AND e.session_id != ''
+				${appendFilterClause(ctx.filterConditions)}
+		)`;
+}
 
 export const SummaryBuilders = {
 	summary_metrics: {
@@ -41,7 +58,8 @@ export const SummaryBuilders = {
 					name: "median_session_duration",
 					type: "number",
 					label: "Median Session Duration",
-					description: "Median time spent actively on pages",
+					description:
+						"Median recorded wall time on pages, summed from page exits",
 					unit: "seconds",
 				},
 				{
@@ -54,50 +72,24 @@ export const SummaryBuilders = {
 			default_visualization: "metric",
 		},
 		customSql: (ctx) => {
-			const {
-				websiteId,
-				startDate,
-				endDate,
-				timezone,
-				filterConditions,
-				filterParams,
-				helpers,
-			} = ctx;
+			const { websiteId, startDate, endDate, timezone, filterParams } = ctx;
 			const tz = timezone || "UTC";
-			const filterClause = appendFilterClause(filterConditions);
-
-			const sessionAttributionCTE = helpers
-				? `${helpers.sessionAttributionCTE},`
-				: "";
 
 			return {
 				sql: `
-				WITH ${sessionAttributionCTE}
-				base_events AS (
-					SELECT e.session_id, e.anonymous_id, e.event_name,
-						toTimeZone(e.time, {timezone:String}) as normalized_time,
-						e.time_on_page
-					FROM analytics.events e
-					${helpers?.sessionAttributionJoin ?? ""}
-					WHERE e.client_id = {websiteId:String}
-						AND e.time >= toDateTime({startDate:String})
-						AND e.time <= toDateTime(concat({endDate:String}, ' 23:59:59'))
-						AND e.session_id != ''
-						${filterClause}
-				),
+				WITH ${summaryBaseEvents(ctx)},
 				session_agg AS (
 					SELECT session_id,
-						countIf(event_name = 'screen_view') as page_count,
-						countIf(event_name != 'screen_view' AND event_name != 'page_exit') as engagement_count,
+						${SESSION_ACTIVITY_FIELDS},
 						sumIf(time_on_page, event_name = 'page_exit' AND time_on_page > 0) as duration
 					FROM base_events
 					GROUP BY session_id
 				),
 				session_summary AS (
 					SELECT
-						countIf(page_count >= 1) as sessions,
-						countIf(page_count = 1 AND ifNull(duration, 0) < 10 AND engagement_count = 0) as bounces,
-						quantileTDigestIf(0.5)(duration, page_count >= 1 AND duration >= 0) as median_duration
+						countIf(page_views >= 1) as sessions,
+						countIf(${SESSION_BOUNCE_CONDITION}) as bounces,
+						quantileTDigestIf(0.5)(duration, page_views >= 1 AND duration >= 0) as median_duration
 					FROM session_agg
 				),
 				event_agg AS (
@@ -214,7 +206,8 @@ export const SummaryBuilders = {
 					name: "median_session_duration",
 					type: "number",
 					label: "Median Session Duration",
-					description: "Median time spent actively on pages",
+					description:
+						"Median recorded wall time on pages, summed from page exits",
 					unit: "seconds",
 				},
 				{
@@ -234,42 +227,22 @@ export const SummaryBuilders = {
 				endDate,
 				granularity,
 				timezone,
-				filterConditions,
 				filterParams,
-				helpers,
 			} = ctx;
 			const tz = timezone || "UTC";
 			const isHourly = granularity === "hour" || granularity === "hourly";
-			const filterClause = appendFilterClause(filterConditions);
 			const timeBucketFn = isHourly ? "toStartOfHour" : "toDate";
 			const dateFormat = isHourly
 				? "formatDateTime(ea.time_bucket, '%Y-%m-%d %H:00:00')"
 				: "ea.time_bucket";
 
-			const sessionAttributionCTE = helpers
-				? `${helpers.sessionAttributionCTE},`
-				: "";
-
 			return {
 				sql: `
-				WITH ${sessionAttributionCTE}
-				base_events AS (
-					SELECT e.session_id, e.anonymous_id, e.event_name,
-						toTimeZone(e.time, {timezone:String}) as normalized_time,
-						e.time_on_page
-					FROM analytics.events e
-					${helpers?.sessionAttributionJoin ?? ""}
-					WHERE e.client_id = {websiteId:String}
-						AND e.time >= toDateTime({startDate:String})
-						AND e.time <= toDateTime(concat({endDate:String}, ' 23:59:59'))
-						AND e.session_id != ''
-						${filterClause}
-				),
+				WITH ${summaryBaseEvents(ctx)},
 				session_agg AS (
 					SELECT session_id,
 						${timeBucketFn}(minIf(normalized_time, event_name = 'screen_view')) as time_bucket,
-						countIf(event_name = 'screen_view') as page_count,
-						countIf(event_name != 'screen_view' AND event_name != 'page_exit') as engagement_count,
+						${SESSION_ACTIVITY_FIELDS},
 						sumIf(time_on_page, event_name = 'page_exit' AND time_on_page > 0) as duration
 					FROM base_events
 					GROUP BY session_id
@@ -277,7 +250,7 @@ export const SummaryBuilders = {
 				session_by_bucket AS (
 					SELECT time_bucket,
 						count() as sessions,
-						countIf(page_count = 1 AND ifNull(duration, 0) < 10 AND engagement_count = 0) as bounces,
+						countIf(${SESSION_BOUNCE_CONDITION}) as bounces,
 						quantileTDigestIf(0.5)(duration, duration >= 0) as median_duration_raw
 					FROM session_agg
 					GROUP BY time_bucket

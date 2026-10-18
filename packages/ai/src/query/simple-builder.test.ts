@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { QueryBuilders } from "./builders";
+import { getQueryBuilder, QueryBuilders } from "./builders";
 import { makeRequiredFilters } from "./filter-fixtures";
 import {
 	getClickHouseQuerySettings,
@@ -114,7 +114,7 @@ describe("SimpleQueryBuilder.compile", () => {
 	it("rewrites custom SQL website filters for org scope", () => {
 		const { sql, params } = compile(
 			{
-				customSql: (websiteId, startDate, endDate) => ({
+				customSql: ({ websiteId, startDate, endDate }) => ({
 					sql: `
 						SELECT count() as total
 						FROM analytics.events e
@@ -555,7 +555,7 @@ describe("SimpleQueryBuilder.compile", () => {
 		);
 		expect(compile({}, { groupBy: ["path"] }).sql).toContain("GROUP BY path");
 		for (const type of ["summary_metrics", "entry_pages"]) {
-			const config = QueryBuilders[type];
+			const config = getQueryBuilder(type);
 			if (!config) {
 				throw new Error(`${type} builder is missing`);
 			}
@@ -794,7 +794,7 @@ describe("SimpleQueryBuilder.compile", () => {
 		["entry_pages", "entry_path"],
 		["exit_pages", "exit_path"],
 	])("picks the %s page from every screen view before applying a path filter", (type, column) => {
-		const config = QueryBuilders[type];
+		const config = getQueryBuilder(type);
 		if (!config) {
 			throw new Error(`${type} builder is missing`);
 		}
@@ -944,11 +944,43 @@ describe("SimpleQueryBuilder.compile", () => {
 		expect(sql).toContain("countIf(page_views >= 1) as total_sessions");
 		expect(sql).toContain("avgIf(duration, page_views >= 1 AND duration > 0)");
 		expect(sql).toContain(
-			"countIf(page_views = 1 AND duration < 10 AND engagement_events = 0)"
+			"countIf(page_views = 1 AND ifNull(duration, 0) < 10 AND engagement_events = 0)"
 		);
 		expect(sql).toContain("nullIf(countIf(page_views >= 1), 0)");
 		expect(sql).not.toContain("count() as total_sessions");
 		expect(sql).not.toContain("page_views <= 1");
+	});
+
+	it("uses page-exit interactions for bounce in summaries, trends and sessions", () => {
+		for (const type of [
+			"summary_metrics",
+			"events_by_date",
+			"session_metrics",
+		]) {
+			const config = getQueryBuilder(type);
+			if (!config) {
+				throw new Error(`Missing ${type} builder`);
+			}
+			const { sql, params } = compileBuilder(type, config, {
+				timezone: "Asia/Amman",
+				filters: [{ field: "path", op: "eq", value: "/clicked-visitor" }],
+			});
+			expect(sql).toContain(
+				"countIf(event_name NOT IN ('screen_view', 'page_exit'))"
+			);
+			expect(sql).toContain(
+				"countIf(event_name = 'page_exit' AND ifNull(interaction_count, 0) > 0)"
+			);
+			expect(sql).toContain(
+				"countIf(page_views = 1 AND ifNull(duration, 0) < 10 AND engagement_events = 0)"
+			);
+			expect(sql).toContain("session_id != ''");
+			expect(Object.values(params)).toContain("/clicked-visitor");
+			expect(sql).toContain("{timezone:String}");
+			if (type !== "session_metrics") {
+				expect(sql).toContain("e.interaction_count");
+			}
+		}
 	});
 
 	it("does not expose page time as session duration", () => {
@@ -957,7 +989,7 @@ describe("SimpleQueryBuilder.compile", () => {
 			"sessions_by_browser",
 			"sessions_time_series",
 		]) {
-			const config = QueryBuilders[type];
+			const config = getQueryBuilder(type);
 			if (!config) {
 				throw new Error(`${type} builder is missing`);
 			}
@@ -1059,7 +1091,7 @@ describe("SimpleQueryBuilder.compile", () => {
 			"profile_list",
 			"profile_revenue",
 		]) {
-			const config = QueryBuilders[type];
+			const config = getQueryBuilder(type);
 			if (!config) {
 				throw new Error(`${type} builder is missing`);
 			}

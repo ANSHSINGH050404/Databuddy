@@ -1,3 +1,4 @@
+import "@databuddy/test/env";
 import {
 	afterAll,
 	beforeAll,
@@ -7,14 +8,13 @@ import {
 	setDefaultTimeout,
 } from "bun:test";
 import { randomUUIDv7 } from "bun";
-import { chCommand, chQuery } from "@databuddy/db/clickhouse";
-import { QueryBuilders } from "./builders";
+import { chCommand, chQuery, clickHouse } from "@databuddy/db/clickhouse";
+import type { EventsInsert } from "@databuddy/db/clickhouse/tables";
+import { getQueryBuilder, QueryBuilders } from "./builders";
 import { filterFor } from "./filter-fixtures";
 import { allowedFilterFields, SimpleQueryBuilder } from "./simple-builder";
 import { ProfilesBuilders } from "./builders/profiles";
 import type { CompiledQuery, QueryRequest, SimpleQueryConfig } from "./types";
-
-const TEST_CLICKHOUSE_URL = "http://default:@127.0.0.1:8123";
 
 type ProfileSessionEventSource =
 	| "analytics"
@@ -38,41 +38,28 @@ type ProfileSessionWebVitalTuple = [
 	path: string,
 ];
 
-// Bun's fetch rejects userinfo in URLs, so the probe goes credential-free;
-// the ClickHouse client parses TEST_CLICKHOUSE_URL itself and is unaffected.
-const isClickHouseUp = await fetch("http://127.0.0.1:8123/?query=SELECT+1", {
-	signal: AbortSignal.timeout(1500),
-})
-	.then((response) => response.ok)
-	.catch(() => false);
-
-// The db client reads CLICKHOUSE_URL at import time; hard-assign localhost so
-// this suite can never touch a real deployment from a developer's .env.
-process.env.CLICKHOUSE_URL = TEST_CLICKHOUSE_URL;
-const { clickHouse } = await import("@databuddy/db/clickhouse");
-
 // SQL planning runs only when integration tests are explicitly requested.
 const integrationEnabled = process.env.CLICKHOUSE_INTEGRATION_TESTS === "true";
+const isClickHouseUp =
+	integrationEnabled &&
+	(await fetch("http://127.0.0.1:8123/?query=SELECT+1", {
+		signal: AbortSignal.timeout(1500),
+	})
+		.then((response) => response.ok)
+		.catch(() => false));
 const iit = integrationEnabled && isClickHouseUp ? it : it.skip;
-const describeIntegration = integrationEnabled ? describe : describe.skip;
+const describeIntegration =
+	integrationEnabled && isClickHouseUp ? describe : describe.skip;
 
 if (isClickHouseUp) {
 	setDefaultTimeout(15_000);
 }
 
-if (!isClickHouseUp) {
+if (integrationEnabled && !isClickHouseUp) {
 	console.warn(
 		"builder-execution: ClickHouse not reachable on localhost:8123 — EXPLAIN suite skipped"
 	);
 }
-
-afterAll(async () => {
-	// The explicit integration run has more ClickHouse suites after this file.
-	// Isolated builder runs still close their client normally.
-	if (isClickHouseUp && !integrationEnabled) {
-		await clickHouse.close();
-	}
-});
 
 const NUMERIC_FILTER_FIELDS = new Set([
 	"session_count",
@@ -200,6 +187,135 @@ function requireQuery(
 	}
 	return query;
 }
+
+const sessionMetricsWebsiteId = `session-metrics-${randomUUIDv7()}`;
+const sessionMetricsCases: {
+	name: string;
+	exit: Pick<EventsInsert, "interaction_count" | "time_on_page"> | null;
+	extra?: Pick<EventsInsert, "event_name" | "interaction_count">;
+	pageInteractions?: number;
+	bounceRate: number;
+}[] = [
+	{
+		name: "clicked",
+		exit: { time_on_page: 5, interaction_count: 1 },
+		bounceRate: 0,
+	},
+	{
+		name: "zero",
+		exit: { time_on_page: 5, interaction_count: 0 },
+		bounceRate: 100,
+	},
+	{
+		name: "null",
+		exit: { time_on_page: 5, interaction_count: null },
+		bounceRate: 100,
+	},
+	{ name: "missing", exit: { time_on_page: 5 }, bounceRate: 100 },
+	{ name: "no-exit", exit: null, bounceRate: 100 },
+	{ name: "null-duration", exit: { time_on_page: null }, bounceRate: 100 },
+	{
+		name: "multi-page",
+		exit: { time_on_page: 5 },
+		extra: { event_name: "screen_view" },
+		bounceRate: 0,
+	},
+	{
+		name: "engagement",
+		exit: { time_on_page: 5 },
+		extra: { event_name: "checkout_start" },
+		bounceRate: 0,
+	},
+	{ name: "ten-seconds", exit: { time_on_page: 10 }, bounceRate: 0 },
+	{
+		name: "non-exit-interactions",
+		exit: { time_on_page: 5 },
+		pageInteractions: 1,
+		bounceRate: 100,
+	},
+];
+
+describeIntegration("session metric engagement against ClickHouse", () => {
+	beforeAll(async () => {
+		const values: EventsInsert[] = sessionMetricsCases.flatMap(
+			({ name, exit, extra, pageInteractions }) => {
+				const events = [
+					{ event_name: "screen_view", interaction_count: pageInteractions },
+					...(extra ? [extra] : []),
+					...(exit ? [{ event_name: "page_exit", ...exit }] : []),
+				];
+				return events.map((event, index) => ({
+					...event,
+					anonymous_id: name,
+					client_id: sessionMetricsWebsiteId,
+					created_at: `2026-08-01 21:00:0${index}`,
+					id: randomUUIDv7(),
+					ip: "",
+					path: `/metric-${name}`,
+					properties: "{}",
+					session_id: name,
+					time: `2026-08-01 21:00:0${index}`,
+					url: `https://example.test/metric-${name}`,
+					user_agent: "",
+				}));
+			}
+		);
+		await clickHouse.insert({
+			table: "analytics.events",
+			format: "JSONEachRow",
+			values,
+		});
+	});
+
+	afterAll(async () => {
+		await chCommand(
+			"ALTER TABLE analytics.events DELETE WHERE client_id = {websiteId:String} SETTINGS mutations_sync = 1",
+			{ websiteId: sessionMetricsWebsiteId }
+		);
+	});
+
+	for (const fixture of sessionMetricsCases) {
+		iit(
+			`keeps summary, trend and session bounce aligned for ${fixture.name}`,
+			async () => {
+				for (const type of [
+					"summary_metrics",
+					"events_by_date",
+					"session_metrics",
+				]) {
+					const config = getQueryBuilder(type);
+					if (!config) {
+						throw new Error(`Missing ${type} builder`);
+					}
+					const { sql, params } = new SimpleQueryBuilder(config, {
+						projectId: sessionMetricsWebsiteId,
+						type,
+						from: "2026-08-01",
+						to: "2026-08-02",
+						timezone: "Asia/Amman",
+						filters: [
+							{ field: "path", op: "eq", value: `/metric-${fixture.name}` },
+						],
+					}).compile();
+					const [row] = await chQuery<Record<string, number | string>>(
+						sql,
+						params
+					);
+					expect(Number(row?.bounce_rate)).toBe(fixture.bounceRate);
+					expect(Number(row?.sessions ?? row?.total_sessions)).toBe(1);
+					if (type !== "session_metrics" && fixture.exit?.time_on_page) {
+						expect(Number(row?.median_session_duration)).toBe(
+							fixture.exit?.time_on_page ?? 0
+						);
+					}
+					if (type === "events_by_date") {
+						expect(row?.date).toBe("2026-08-02");
+					}
+				}
+			}
+		);
+	}
+});
 
 describeIntegration("profile query identity against ClickHouse", () => {
 	beforeAll(async () => {
@@ -389,22 +505,14 @@ describeIntegration("profile query identity against ClickHouse", () => {
 	});
 
 	afterAll(async () => {
-		await chCommand(
-			"ALTER TABLE analytics.events DELETE WHERE client_id = {websiteId:String} SETTINGS mutations_sync = 1",
-			{ websiteId }
-		);
-		await chCommand(
-			"ALTER TABLE analytics.custom_events DELETE WHERE owner_id = {websiteId:String} SETTINGS mutations_sync = 1",
-			{ websiteId }
-		);
-		await chCommand(
-			"ALTER TABLE analytics.events DELETE WHERE client_id = {websiteId:String} SETTINGS mutations_sync = 1",
-			{ websiteId: collisionWebsiteId }
-		);
 		await Promise.all([
 			chCommand(
-				"ALTER TABLE analytics.custom_events DELETE WHERE owner_id = {websiteId:String} SETTINGS mutations_sync = 1",
-				{ websiteId: customAliasWebsiteId }
+				"ALTER TABLE analytics.events DELETE WHERE client_id IN {websiteIds:Array(String)} SETTINGS mutations_sync = 1",
+				{ websiteIds: [websiteId, collisionWebsiteId] }
+			),
+			chCommand(
+				"ALTER TABLE analytics.custom_events DELETE WHERE owner_id IN {websiteIds:Array(String)} SETTINGS mutations_sync = 1",
+				{ websiteIds: [websiteId, customAliasWebsiteId] }
 			),
 			chCommand(
 				"ALTER TABLE analytics.error_spans DELETE WHERE client_id = {websiteId:String} SETTINGS mutations_sync = 1",
