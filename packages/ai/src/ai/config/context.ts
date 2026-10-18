@@ -64,7 +64,10 @@ export function formatContextForLLM(context: AppContext): string {
 		`<timezone>${context.timezone}</timezone>`,
 	];
 
-	const websites = formatAccessibleWebsites(context.accessibleWebsites ?? []);
+	const websites = formatAccessibleWebsites(
+		context.accessibleWebsites ?? [],
+		25
+	);
 	if (websites) {
 		lines.push(websites);
 	}

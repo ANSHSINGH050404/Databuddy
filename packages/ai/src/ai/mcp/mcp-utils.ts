@@ -34,7 +34,19 @@ import { z } from "zod";
 export const FilterSchema = QueryFilterSchema.omit({
 	target: true,
 	having: true,
-}).strict() satisfies z.ZodType<Filter>;
+})
+	.extend({
+		// The model often uses the API-style spelling; planner permissions still
+		// validate the canonical field and retain the original predicate.
+		field: QueryFilterSchema.shape.field.transform((field) =>
+			field === "eventName"
+				? "event_name"
+				: field === "property_name"
+					? "property_key"
+					: field
+		),
+	})
+	.strict() satisfies z.ZodType<Filter>;
 
 export const MCP_RESULT_ROW_LIMIT = 20;
 const MCP_ROW_ARRAY_LIMIT = 50;
@@ -185,6 +197,20 @@ function orderByColumns(config: SimpleQueryConfig): string[] {
 	).filter(isOrderByFieldAllowed);
 }
 
+export function resolveQueryOrdering(
+	type: string,
+	config: SimpleQueryConfig,
+	orderBy: string | undefined
+) {
+	if (orderBy && config.customSql && !CUSTOM_SQL_ORDER_BY_TYPES.has(type)) {
+		return {
+			orderBy: undefined,
+			warning: `${type} uses its fixed ordering; requested orderBy was not applied.`,
+		};
+	}
+	return { orderBy, warning: undefined };
+}
+
 function orderByError(
 	type: string,
 	config: SimpleQueryConfig,
@@ -220,6 +246,9 @@ function queryShapeError(
 		!config.timeBucket &&
 		!supported.some((unit) => unit === query.timeUnit)
 	) {
+		if (type === "custom_events") {
+			return "custom_events returns event totals, not time buckets. For hourly or daily buckets, retry with custom_events_trends_by_event and timeUnit hour or day respectively; preserve event filters, dates, website and timezone. For totals only, retry custom_events with timeUnit omitted. Do not treat this rejection as zero events.";
+		}
 		return supported.length > 0
 			? `timeUnit '${query.timeUnit}' is not supported for ${type}. Use ${supported.join(" or ")}.`
 			: `${type} does not take a timeUnit. Remove timeUnit.`;
@@ -339,22 +368,23 @@ export function buildBatchQueryRequests(
 			reject("from must not be after to.");
 			continue;
 		}
+		const ordering = resolveQueryOrdering(resolvedType, config, q.orderBy);
 		const shapeError = queryItemError(
 			resolvedType,
 			config,
-			q,
+			{ ...q, orderBy: ordering.orderBy },
 			(Date.parse(to) - Date.parse(from)) / MS_PER_DAY
 		);
 		if (shapeError) {
 			reject(shapeError);
 			continue;
 		}
-		const keepNewestRows = keepsNewestRows(config, q.orderBy);
+		const keepNewestRows = keepsNewestRows(config, ordering.orderBy);
 		requests.push({
 			inputIndex,
 			keepNewestRows,
 			rowLimit: Math.min(q.limit ?? MCP_RESULT_ROW_LIMIT, MCP_RESULT_ROW_LIMIT),
-			summary: querySummary({ ...q, from, to, timezone, type: resolvedType }),
+			summary: `${querySummary({ ...q, orderBy: ordering.orderBy, from, to, timezone, type: resolvedType })}${ordering.warning ? ` | ${ordering.warning}` : ""}`,
 			projectId: websiteId,
 			type: resolvedType,
 			from,
@@ -363,7 +393,7 @@ export function buildBatchQueryRequests(
 			limit: keepNewestRows ? undefined : q.limit,
 			timezone,
 			filters: q.filters,
-			orderBy: q.orderBy,
+			orderBy: ordering.orderBy,
 		});
 	}
 	return { invalid, requests };

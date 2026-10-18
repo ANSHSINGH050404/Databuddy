@@ -21,6 +21,22 @@ async function discover(input: {
 	return result;
 }
 
+test("discovery distinguishes aggregate builders from supported time-series units", async () => {
+	expect(await discover({ search: "custom_events_by_path" })).toMatchObject({
+		types: expect.arrayContaining([
+			expect.objectContaining({ name: "custom_events_by_path", timeUnits: [] }),
+		]),
+	});
+	expect(await discover({ search: "custom_events_trends" })).toMatchObject({
+		types: expect.arrayContaining([
+			expect.objectContaining({
+				name: "custom_events_trends",
+				timeUnits: ["hour", "day"],
+			}),
+		]),
+	});
+});
+
 test("discovery exposes custom error context and its effective ordering", async () => {
 	const result = await discoverQueryTypesTool.execute?.(
 		{ search: "recent_errors" },

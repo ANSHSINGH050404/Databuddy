@@ -1,4 +1,5 @@
-import { createGateway } from "ai";
+import { createGateway, wrapLanguageModel } from "ai";
+import { recoverEmptyToolResponse } from "./empty-tool-response";
 
 const apiKey = (process.env.AI_GATEWAY_API_KEY ?? "").trim();
 
@@ -24,7 +25,7 @@ export type AgentSource = "api" | "dashboard" | "mcp" | "slack";
 
 export const models = {
 	tiny: gateway.chat(modelNames.tiny),
-	quick: gateway.chat(modelNames.quick),
+	quick: createModelFromId(modelNames.quick),
 	balanced: gateway.chat(modelNames.balanced),
 	deep: gateway.chat(modelNames.deep),
 } as const;
@@ -38,7 +39,10 @@ export const ANTHROPIC_CACHE_1H = {
 export const AI_MODEL_MAX_RETRIES = 3;
 
 export function createModelFromId(modelId: string) {
-	return gateway.chat(modelId);
+	const model = gateway.chat(modelId);
+	return modelId === modelNames.quick
+		? wrapLanguageModel({ model, middleware: recoverEmptyToolResponse })
+		: model;
 }
 
 export function getDefaultAgentModelId(_source?: AgentSource): string {

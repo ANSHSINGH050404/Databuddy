@@ -2,6 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { WEBSITE_QUERY_BUILDERS } from "../../query/builders";
 import { allowedFilterFields } from "../../query/simple-builder";
+import { TimeGranularity } from "../../query/types";
 
 function listAllTypes() {
 	return WEBSITE_QUERY_BUILDERS.map(([name, config]) => ({
@@ -18,6 +19,9 @@ function listAllTypes() {
 		outputFields: config.meta?.output_fields ?? config.fields ?? null,
 		requiredFilters: config.requiredFilters ?? [],
 		requiredAnyFilter: config.requiredAnyFilter ?? [],
+		timeUnits: config.timeBucket
+			? Object.keys(TimeGranularity)
+			: (config.meta?.supports_granularity ?? []),
 		tags: config.meta?.tags ?? [],
 	}));
 }
@@ -27,7 +31,7 @@ const CATEGORIES = [...new Set(ALL_TYPES.map((t) => t.category))].sort();
 
 export const discoverQueryTypesTool = tool({
 	description:
-		"Discover the analytics query builders available to get_data. With no category or keyword, returns a compact catalog of names, descriptions and tags; look up a relevant name for its input contract. A category or keyword returns allowed filters/operators, required selectors, output fields and default order. Null outputFields means undocumented, not an empty result schema. Omit orderBy when ordering is undocumented. No I/O. A category-scoped keyword miss also returns outsideCategory matches without changing the scoped types or count.",
+		"Discover the analytics query builders available to get_data. With no category or keyword, returns a compact catalog of names, descriptions and tags; look up a relevant name for its input contract. A category or keyword returns allowed filters/operators, required selectors, output fields, default order and accepted timeUnits. An empty timeUnits list means omit timeUnit (or use null). Null outputFields means undocumented, not an empty result schema. Omit orderBy when ordering is undocumented. No I/O. A category-scoped keyword miss also returns outsideCategory matches without changing the scoped types or count.",
 	inputSchema: z.object({
 		category: z
 			.enum([CATEGORIES[0] ?? "Summary", ...CATEGORIES.slice(1)] as [

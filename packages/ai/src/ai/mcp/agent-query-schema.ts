@@ -24,7 +24,10 @@ export const agentDataInputSchema = z.object({
 					"Inclusive YYYY-MM-DD, or null when using a preset."
 				),
 				timeUnit: optionalInput(
-					z.enum(["minute", "hour", "day", "week", "month"])
+					z
+						.enum(["minute", "hour", "day", "week", "month"])
+						.or(z.literal("null"))
+						.transform((value) => (value === "null" ? undefined : value))
 				),
 				limit: optionalInput(z.number().min(1).max(1000)),
 				filters: optionalInput(z.array(FilterSchema)),

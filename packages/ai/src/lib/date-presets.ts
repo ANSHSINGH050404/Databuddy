@@ -5,7 +5,9 @@ export const DatePresets = {
 	yesterday: "yesterday",
 	last_7d: "last_7d",
 	last_14d: "last_14d",
+	last_3_weeks: "last_3_weeks",
 	last_30d: "last_30d",
+	last_60d: "last_60d",
 	last_90d: "last_90d",
 	this_week: "this_week",
 	last_week: "last_week",
@@ -25,7 +27,9 @@ const ROLLING_DATE_OFFSETS: Partial<
 	yesterday: [-1, -1],
 	last_7d: [-6, 0],
 	last_14d: [-13, 0],
+	last_3_weeks: [-20, 0],
 	last_30d: [-29, 0],
+	last_60d: [-59, 0],
 	last_90d: [-89, 0],
 };
 

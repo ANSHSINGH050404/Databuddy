@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { asSchema, generateText } from "ai";
+import { asSchema, generateText, stepCountIs } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { SimpleQueryBuilder } from "../../query/simple-builder";
 import { discoverQueryTypesTool } from "./discover-query-types";
-import { getDataTool } from "./get-data";
+import { getDataModelOutput, getDataTool } from "./get-data";
 
 const options = {
 	toolCallId: "query-contract-test",
@@ -25,12 +25,211 @@ async function executeData(input: unknown, toolOptions = options) {
 	if (!parsed.success) {
 		throw parsed.error;
 	}
-	return getDataTool.execute(parsed.value, toolOptions);
+	const output = await getDataTool.execute(parsed.value, toolOptions);
+	if (!("results" in output)) {
+		throw new Error("Expected a completed query batch");
+	}
+	return output;
 }
 
 afterEach(() => mock.restore());
 
 describe("analytics tool contract", () => {
+	it("treats only the literal null grain as omitted while preserving event scope", async () => {
+		const execute = spyOn(
+			SimpleQueryBuilder.prototype,
+			"execute"
+		).mockResolvedValue([{ event_name: "checkout_step", count: 7 }]);
+		const filters = [{ field: "event_name", op: "eq", value: "checkout_step" }];
+		const output = await executeData({
+			queries: [
+				{
+					type: "custom_events",
+					preset: "last_7d",
+					timeUnit: "null",
+					filters,
+				},
+			],
+		});
+		expect(output.results.custom_events).toMatchObject({
+			from: "2026-08-30",
+			to: "2026-09-05",
+			filters,
+			data: [{ event_name: "checkout_step", count: 7 }],
+		});
+		expect(output.results.custom_events?.error).toBeUndefined();
+		await expect(
+			executeData({
+				queries: [
+					{
+						type: "custom_events",
+						preset: "last_7d",
+						timeUnit: "year",
+						filters,
+					},
+				],
+			})
+		).rejects.toThrow();
+		const rejected = await executeData({
+			queries: [
+				{
+					type: "custom_events",
+					preset: "last_7d",
+					timeUnit: "day",
+					filters,
+				},
+			],
+		});
+		expect(rejected.results.custom_events?.error).toContain("timeUnit");
+		expect(execute).toHaveBeenCalledTimes(1);
+	});
+	it("runs fixed-order queries with a disclosed default while preserving scope and filter validation", async () => {
+		const execute = spyOn(
+			SimpleQueryBuilder.prototype,
+			"execute"
+		).mockResolvedValue([{ event_name: "checkout_completion", count: 7 }]);
+		const output = await executeData({
+			queries: [
+				{
+					type: "custom_events",
+					preset: "last_7d",
+					orderBy: "count DESC",
+					filters: [
+						{ field: "event_name", op: "eq", value: "checkout_completion" },
+					],
+				},
+				{
+					type: "custom_events",
+					orderBy: "count DESC",
+					filters: [{ field: "not_a_field", op: "eq", value: "x" }],
+				},
+			],
+		});
+		const result = Object.values(output.results).find((item) => !item.error);
+		expect(result).toMatchObject({
+			from: "2026-08-30",
+			to: "2026-09-05",
+			filters: [
+				{ field: "event_name", op: "eq", value: "checkout_completion" },
+			],
+			data: [{ event_name: "checkout_completion", count: 7 }],
+		});
+		expect(result?.warning).toContain("requested orderBy was not applied");
+		expect(
+			Object.values(output.results).find((item) => item.error)?.error
+		).toContain("not permitted");
+		expect(execute).toHaveBeenCalledTimes(1);
+	});
+	it("keeps a rejected query distinct from a successful empty result in model output", async () => {
+		const execute = spyOn(
+			SimpleQueryBuilder.prototype,
+			"execute"
+		).mockResolvedValue([]);
+		const output = await executeData({
+			queries: [
+				{ type: "custom_events_by_path", timeUnit: "minute" },
+				{ type: "custom_events", timeUnit: "day" },
+				{ type: "country" },
+			],
+		});
+		const mapped = getDataModelOutput({ output });
+		expect(mapped.type).toBe("text");
+		if (mapped.type !== "text") {
+			throw new Error("Mixed results must retain successful data");
+		}
+		const modelOutput = JSON.parse(mapped.value);
+		expect(modelOutput.results.custom_events_by_path.error).toContain(
+			"Remove timeUnit"
+		);
+		expect(modelOutput.results.custom_events_by_path).not.toHaveProperty(
+			"data"
+		);
+		expect(modelOutput.results.custom_events_by_path).not.toHaveProperty(
+			"rowCount"
+		);
+		expect(modelOutput.results.custom_events.error).toBeDefined();
+		expect(modelOutput.results.custom_events).not.toHaveProperty("data");
+		expect(modelOutput.results.custom_events).not.toHaveProperty("rowCount");
+		expect(modelOutput.results.country).toMatchObject({
+			data: [],
+			rowCount: 0,
+		});
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(output.results.custom_events_by_path?.error).toBeDefined();
+	});
+	it("passes failed batches to the next SDK step as errors and preserves empty successes", async () => {
+		spyOn(SimpleQueryBuilder.prototype, "execute").mockResolvedValue([]);
+		for (const failed of [true, false]) {
+			const queries = failed
+				? [{ type: "custom_events", timeUnit: "day" }]
+				: [{ type: "country" }];
+			let calls = 0;
+			let mappedOutput = "";
+			const model = new MockLanguageModelV3({
+				doGenerate: async ({ prompt }) => {
+					const first = calls++ === 0;
+					if (!first) {
+						const message = prompt.find((item) => item.role === "tool");
+						const part = message?.content[0];
+						if (part?.type === "tool-result") {
+							mappedOutput = JSON.stringify(part.output);
+						}
+					}
+					return {
+						content: first
+							? [
+									{
+										type: "tool-call" as const,
+										toolCallId: "batch-status",
+										toolName: "get_data",
+										input: JSON.stringify({ queries }),
+									},
+								]
+							: [{ type: "text" as const, text: "Done" }],
+						finishReason: {
+							unified: first ? ("tool-calls" as const) : ("stop" as const),
+							raw: "stop",
+						},
+						usage: {
+							inputTokens: {
+								total: 1,
+								noCache: 1,
+								cacheRead: 0,
+								cacheWrite: 0,
+							},
+							outputTokens: { total: 1, text: 1, reasoning: 0 },
+						},
+						warnings: [],
+					};
+				},
+			});
+			const result = await generateText({
+				model,
+				prompt: "Read analytics",
+				stopWhen: stepCountIs(2),
+				tools: {
+					get_data: { ...getDataTool, toModelOutput: getDataModelOutput },
+				},
+				experimental_context: options.experimental_context,
+			});
+			expect(result.steps).toHaveLength(2);
+			expect(calls).toBe(2);
+			const mapped = JSON.parse(mappedOutput);
+			expect(mapped.type).toBe(failed ? "error-json" : "text");
+			if (failed) {
+				expect(mapped.value.results.custom_events.error).toContain("timeUnit");
+				expect(mapped.value.results.custom_events).not.toHaveProperty("data");
+				expect(mapped.value.results.custom_events).not.toHaveProperty(
+					"rowCount"
+				);
+			} else {
+				expect(JSON.parse(mapped.value).results.country).toMatchObject({
+					data: [],
+					rowCount: 0,
+				});
+			}
+		}
+	});
 	it("accepts strict-provider null fields through the native SDK and resolves the default", async () => {
 		spyOn(SimpleQueryBuilder.prototype, "execute").mockResolvedValue([]);
 		const model = new MockLanguageModelV3({
@@ -84,10 +283,78 @@ describe("analytics tool contract", () => {
 		});
 	});
 
+	it("canonicalizes property_name only where property-key filters are allowed", async () => {
+		const execute = spyOn(
+			SimpleQueryBuilder.prototype,
+			"execute"
+		).mockResolvedValue([]);
+		const filters = [
+			{ field: "event_name", op: "eq", value: "checkout_step" },
+			{ field: "property_name", op: "eq", value: "step_name" },
+		];
+		const output = await executeData({
+			queries: [
+				{
+					type: "custom_events_property_top_values",
+					preset: "last_7d",
+					filters,
+				},
+				{ type: "custom_events_trends", preset: "last_7d", filters },
+			],
+		});
+		expect(output.results.custom_events_property_top_values).toMatchObject({
+			from: "2026-08-30",
+			to: "2026-09-05",
+			filters: [
+				filters[0],
+				{ field: "property_key", op: "eq", value: "step_name" },
+			],
+		});
+		expect(
+			output.results.custom_events_property_top_values?.error
+		).toBeUndefined();
+		expect(output.results.custom_events_trends?.error).toContain(
+			"not permitted"
+		);
+		expect(filters[1]?.field).toBe("property_name");
+		expect(execute).toHaveBeenCalledTimes(1);
+	});
+
+	it("canonicalizes eventName without widening filter permissions or changing the predicate", async () => {
+		const execute = spyOn(
+			SimpleQueryBuilder.prototype,
+			"execute"
+		).mockResolvedValue([]);
+		const result = await executeData({
+			queries: [
+				{
+					type: "custom_events",
+					filters: [
+						{ field: "eventName", op: "eq", value: "signup_completed" },
+					],
+				},
+				{
+					type: "country",
+					filters: [
+						{ field: "eventName", op: "eq", value: "signup_completed" },
+					],
+				},
+			],
+		});
+		expect(result.results.custom_events?.filters).toEqual([
+			{ field: "event_name", op: "eq", value: "signup_completed" },
+		]);
+		expect(result.results.custom_events?.error).toBeUndefined();
+		expect(result.results.country?.error).toContain("not permitted");
+		expect(execute).toHaveBeenCalledTimes(1);
+	});
+
 	it.each([
 		{ preset: undefined, from: "2026-08-06" },
 		{ preset: "last_30d" as const, from: "2026-08-06" },
 		{ preset: "last_7d" as const, from: "2026-08-29" },
+		{ preset: "last_3_weeks" as const, from: "2026-08-15" },
+		{ preset: "last_60d" as const, from: "2026-07-07" },
 	])("resolves $preset as inclusive calendar dates using the conversation clock/timezone", async ({
 		preset,
 		from,
@@ -382,11 +649,6 @@ describe("analytics tool contract", () => {
 	});
 
 	it.each([
-		{
-			query: { type: "summary_metrics", orderBy: "pageviews DESC" },
-			error:
-				"summary_metrics returns rows in a fixed order and does not support orderBy. Remove orderBy.",
-		},
 		{
 			query: {
 				type: "country",

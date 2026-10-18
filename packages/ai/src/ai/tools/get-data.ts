@@ -12,7 +12,7 @@ import {
 	SANITIZED_QUERY_ERROR,
 	WEBSITE_QUERY_TYPES,
 } from "../../query";
-import { resolveDatePreset } from "../../lib/date-presets";
+import { DatePresets, resolveDatePreset } from "../../lib/date-presets";
 import type { CompiledQuery, QueryRequest } from "../../query/types";
 import { agentDataInputSchema } from "../mcp/agent-query-schema";
 import {
@@ -20,6 +20,7 @@ import {
 	keepsNewestRows,
 	MCP_RESULT_ROW_LIMIT,
 	queryItemError,
+	resolveQueryOrdering,
 } from "../mcp/mcp-utils";
 import { normalizeClickHouseDateTime } from "../../query/date-utils";
 import {
@@ -73,6 +74,7 @@ interface QueryItemResult {
 	to?: string;
 	truncated?: boolean;
 	type: string;
+	warning?: string;
 	websiteId?: string;
 }
 
@@ -119,6 +121,24 @@ export function getDataModelOutput({
 }: {
 	output: { results: Record<string, QueryItemResult> };
 }) {
+	const entries = Object.entries(output.results);
+	if (entries.length > 0 && entries.every(([, result]) => result.error)) {
+		return {
+			type: "error-json" as const,
+			value: {
+				results: Object.fromEntries(
+					entries.map(([key, result]) => [
+						key,
+						{
+							type: result.type,
+							websiteId: result.websiteId ?? null,
+							error: result.error ?? "Query failed",
+						},
+					])
+				),
+			},
+		};
+	}
 	return {
 		type: "text" as const,
 		value: JSON.stringify({
@@ -126,7 +146,13 @@ export function getDataModelOutput({
 				Object.entries(output.results).map(
 					([key, { query: _query, data, ...result }]) => [
 						key,
-						{ ...result, data: data.map(capRowArrays) },
+						result.error
+							? {
+									type: result.type,
+									websiteId: result.websiteId,
+									error: result.error,
+								}
+							: { ...result, data: data.map(capRowArrays) },
 					]
 				)
 			),
@@ -162,7 +188,7 @@ function resolveDates(
 }
 
 export const getDataTool = tool({
-	description: `Run analytics query builders for explicit data questions. Batch 1-10 queries per call. Use preset (last_7d/last_30d/...) or from+to dates; omitted dates default to last_30d in the context timezone. Read the returned definition for population and percentage semantics. Each query may target a specific website via websiteId; omit to use the workspace default. Filters select rows: never supply target or having. discover_query_types lists allowed and required filters. Results include at most ${MCP_RESULT_ROW_LIMIT} rows; rowCount is the number of query rows, not the whole population. Query limits may exclude more rows even when truncated is false. Never infer absence, totals, or completeness from a ranked list; query the exact subject or use an aggregate builder.`,
+	description: `Run analytics query builders for explicit data questions. Batch 1-10 queries per call; split larger requests into multiple calls yourself. limit must be 1-1000 or null, never 10000. Valid presets are exactly ${Object.keys(DatePresets).join(", ")}. last_3_weeks means 21 inclusive calendar days through today. For a different period such as the last 21 days, compute inclusive from/to dates in the context timezone (today minus 20 days through today) and set preset:null. Never send dates and a preset together. Use only builder names from the schema; discover_query_types if the builder is unknown. For event totals or an event-name inventory, query custom_events with timeUnit:null; it does not produce time buckets. For daily event counts use custom_events_trends (one combined series) or custom_events_trends_by_event (separate series per event), timeUnit:"day" and orderBy:null. For example, compare events with {"queries":[{"type":"custom_events_trends_by_event","preset":"last_30d","from":null,"to":null,"timeUnit":"day","orderBy":null,"filters":[{"field":"event_name","op":"in","value":["add_to_cart","cart_view"]}],"limit":1000,"websiteId":null,"timezone":null}]}. Keep the requested event names and period; do not use the example names or default period for a different request. discover_query_types is not needed for these known builders. If a call rejects the date shape, repair it yourself: with a preset both from and to must be null; with explicit dates preset must be null. The user already supplied the period, so do not ask them to choose it again. With no supplied period use {"queries":[{"type":"custom_events","preset":"last_30d","from":null,"to":null,"timeUnit":null,"orderBy":null,"filters":null,"limit":100,"websiteId":null,"timezone":null}]}. Preserve a supplied period instead of the example default. Event names come from this result, not from asking the user to remember them. Use preset (last_7d/last_30d/...) or from+to dates; omitted dates default to last_30d in the context timezone. Read the returned definition for population and percentage semantics. Each query may target a specific website via websiteId; omit to use the workspace default. Filters select rows: never supply target or having. discover_query_types lists allowed and required filters. Results include at most ${MCP_RESULT_ROW_LIMIT} rows; rowCount is the number of query rows, not the whole population. Query limits may exclude more rows even when truncated is false. Never infer absence, totals, or completeness from a ranked list; query the exact subject or use an aggregate builder.`,
 	inputSchema: z.object({
 		queries: z
 			.array(queryItemSchema)
@@ -204,12 +230,22 @@ export const getDataTool = tool({
 						ctx.currentDateTime
 					);
 					const config = QueryBuilders[item.type];
+					const ordering = resolveQueryOrdering(
+						item.type,
+						config,
+						item.orderBy
+					);
 					const days =
 						(Date.parse(to.slice(0, 10)) - Date.parse(from.slice(0, 10))) /
 						MS_PER_DAY;
 					const blocked =
 						toolDateRangeError(from, to, ctx, timezone) ??
-						queryItemError(item.type, config, item, days) ??
+						queryItemError(
+							item.type,
+							config,
+							{ ...item, orderBy: ordering.orderBy },
+							days
+						) ??
 						(await queryPlanGateError([item.type], { websiteId }));
 					if (blocked) {
 						return {
@@ -220,7 +256,7 @@ export const getDataTool = tool({
 							error: blocked,
 						};
 					}
-					const keepNewest = keepsNewestRows(config, item.orderBy);
+					const keepNewest = keepsNewestRows(config, ordering.orderBy);
 					const req: QueryRequest = {
 						projectId: websiteId,
 						type: item.type,
@@ -228,7 +264,7 @@ export const getDataTool = tool({
 						to,
 						timeUnit: item.timeUnit,
 						filters: item.filters,
-						orderBy: item.orderBy,
+						orderBy: ordering.orderBy,
 						limit: keepNewest ? undefined : item.limit,
 						timezone,
 					};
@@ -255,6 +291,7 @@ export const getDataTool = tool({
 					return {
 						type: item.type,
 						definition: config.meta?.description,
+						warning: ordering.warning,
 						websiteId,
 						filters: item.filters ?? [],
 						from,

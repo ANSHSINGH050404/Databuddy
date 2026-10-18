@@ -1,6 +1,6 @@
 import type { SystemModelMessage } from "ai";
 import type { AgentConfig, AgentThinking } from "../agents/types";
-import { ANTHROPIC_CACHE_1H } from "./models";
+import { ANTHROPIC_CACHE_1H, modelNames } from "./models";
 
 const OPENAI_REASONING_MODEL_IDS = new Set([
 	"openai/gpt-5.6-luna",
@@ -14,6 +14,12 @@ export function conversationModelOptions(
 ): Pick<AgentConfig, "temperature" | "providerOptions"> & {
 	systemProviderOptions?: SystemModelMessage["providerOptions"];
 } {
+	if (modelId === modelNames.quick) {
+		return {
+			temperature: 0.1,
+			providerOptions: { gateway: { only: ["google"] } },
+		};
+	}
 	const effort = thinking && thinking !== "off" ? thinking : undefined;
 	if (modelId.startsWith("anthropic/")) {
 		const budgets = { low: 2048, medium: 8192, high: 16_384 };

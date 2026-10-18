@@ -34,7 +34,6 @@ describe("conversation model compatibility", () => {
 		expect(claude.temperature).toBeUndefined();
 
 		for (const modelId of [
-			modelNames.quick,
 			modelNames.deep,
 			modelNames.tiny,
 			"openai/synthetic-unknown-model",
@@ -44,6 +43,18 @@ describe("conversation model compatibility", () => {
 			expect(options.systemProviderOptions).toBeUndefined();
 			expect(options.temperature).toBe(0.1);
 		}
+	});
+
+	it("routes Quick to Google's native provider without changing other tiers", () => {
+		for (const thinking of [undefined, "off", "high"] as const) {
+			expect(conversationModelOptions(modelNames.quick, thinking)).toEqual({
+				temperature: 0.1,
+				providerOptions: { gateway: { only: ["google"] } },
+			});
+		}
+		expect(
+			conversationModelOptions(modelNames.deep).providerOptions
+		).toBeUndefined();
 	});
 
 	it("leaves reasoning at provider defaults when effort is absent or off, while retaining valid cache settings", () => {

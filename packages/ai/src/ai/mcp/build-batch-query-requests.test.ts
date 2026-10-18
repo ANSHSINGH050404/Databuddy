@@ -7,6 +7,25 @@ import {
 } from "./mcp-utils";
 
 describe("buildBatchQueryRequests", () => {
+	it("uses and discloses fixed ordering without modifying the supplied query", () => {
+		const input = {
+			type: "custom_events",
+			preset: "last_7d" as const,
+			orderBy: "count DESC",
+		};
+		const plan = buildBatchQueryRequests(
+			[input],
+			"website-1",
+			"UTC",
+			new Date("2026-09-05T00:00:00Z")
+		);
+		expect(plan.invalid).toEqual([]);
+		expect(plan.requests[0]?.orderBy).toBeUndefined();
+		expect(plan.requests[0]?.summary).toContain(
+			"requested orderBy was not applied"
+		);
+		expect(input.orderBy).toBe("count DESC");
+	});
 	it("defaults to 30 inclusive calendar days using the supplied clock and timezone", () => {
 		const plan = buildBatchQueryRequests(
 			[{ type: "country" }],
