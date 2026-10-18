@@ -264,7 +264,9 @@ async function prepareMcpAgentRun(options: RunMcpAgentOptions) {
 			websiteId: website?.id,
 		}),
 		isMemoryEnabled()
-			? getMemoryContext(historyInput, memoryUserId, apiKey?.id ?? null)
+			? getMemoryContext(historyInput, memoryUserId, apiKey?.id ?? null, {
+					websiteId: website?.id,
+				})
 			: Promise.resolve(null),
 		loadOrganizationBusinessContext({
 			organizationId,

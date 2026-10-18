@@ -1,10 +1,12 @@
 import { config } from "@databuddy/env/app";
 import { getMemoryClient } from "@databuddy/services/business-memory";
 export { getMemoryClient } from "@databuddy/services/business-memory";
+import type Supermemory from "supermemory";
 import { fenceUntrusted } from "../ai/prompts/context";
 import { stripHtmlTags } from "./sanitize";
 
 const MAX_MEMORY_LENGTH = 2000;
+const MAX_PROMPT_MEMORIES = 10;
 const MEMORY_REQUEST_CLAUSE = /[^.!?;:,\n]+\??/g;
 const MEMORY_REQUEST_FILLER =
 	/^(?:(?:please|pls|plz|kindly|also|and|but|so|ok|okay|hey|hi|hello|btw|oh|now|just|thanks|thank you|databunny)\b\s*)+/;
@@ -72,30 +74,40 @@ export function asksToForget(message: string): boolean {
 	return asksMemoryRequest(message, FORGET_REQUESTS);
 }
 
-export type MemoryContainerKind = "apikey" | "user";
-
-export function memoryContainerTag(
-	kind: MemoryContainerKind,
-	id: string
-): string {
-	return `${kind}_${id}`;
-}
-
 function identityContainerTag(
 	userId: string | null,
 	apiKeyId: string | null
 ): string | null {
 	if (userId) {
-		return memoryContainerTag("user", userId);
+		return `user_${userId}`;
 	}
 	if (apiKeyId) {
-		return memoryContainerTag("apikey", apiKeyId);
+		return `apikey_${apiKeyId}`;
 	}
 	return null;
 }
 
 function uniqueNonEmpty(values: string[]): string[] {
 	return [...new Set(values.filter(Boolean))];
+}
+
+function recallFilters(
+	websiteId?: string
+): Supermemory.ProfileParams["filters"] {
+	return {
+		OR: [
+			{ key: "category", value: "preference", filterType: "metadata" },
+			...(websiteId
+				? [
+						{
+							key: "websiteId",
+							value: websiteId,
+							filterType: "metadata" as const,
+						},
+					]
+				: []),
+		],
+	};
 }
 
 export interface MemoryContext {
@@ -118,7 +130,7 @@ export async function getMemoryContext(
 	query: string,
 	userId: string | null,
 	apiKeyId: string | null,
-	options?: { threshold?: number }
+	options?: { threshold?: number; websiteId?: string }
 ): Promise<MemoryContext> {
 	const client = getMemoryClient();
 	const containerTag = identityContainerTag(userId, apiKeyId);
@@ -129,6 +141,7 @@ export async function getMemoryContext(
 	try {
 		const profile = await client.profile({
 			containerTag,
+			filters: recallFilters(options?.websiteId),
 			q: query,
 			threshold: options?.threshold ?? 0.25,
 		});
@@ -167,14 +180,9 @@ export function storeConversation(
 		return;
 	}
 
-	const content = conversation.map((m) => `${m.role}: ${m.content}`).join("\n");
-
-	const domain = options?.domain ?? "unknown";
-	const entityContext = `Analytics conversation about ${domain}. Extract user preferences, KPIs they track, alerts they care about, and recurring questions.`;
-
 	client
 		.add({
-			content,
+			content: conversation.map((m) => `${m.role}: ${m.content}`).join("\n"),
 			containerTag,
 			metadata: {
 				...(options?.websiteId && { websiteId: options.websiteId }),
@@ -183,12 +191,12 @@ export function storeConversation(
 				}),
 				...options?.metadata,
 			},
-			entityContext,
+			entityContext: `Analytics conversation about ${options?.domain ?? "unknown"}. Extract user preferences, KPIs they track, alerts they care about, and recurring questions.`,
 		})
 		.catch(() => {});
 }
 
-export function saveCuratedMemory(
+export async function saveCuratedMemory(
 	content: string,
 	userId: string | null,
 	apiKeyId: string | null,
@@ -196,26 +204,32 @@ export function saveCuratedMemory(
 		category?: string;
 		websiteId?: string;
 	}
-): void {
+): Promise<{ saved: boolean; status: "accepted" | "unavailable" | "failed" }> {
 	const client = getMemoryClient();
 	const containerTag = identityContainerTag(userId, apiKeyId);
 	if (!(client && containerTag)) {
-		return;
+		return { saved: false, status: "unavailable" };
 	}
 
-	client
-		.add({
-			content: sanitizeMemoryContent(content),
-			containerTag,
-			metadata: {
-				category: options?.category ?? "insight",
-				type: "curated",
-				...(options?.websiteId && { websiteId: options.websiteId }),
+	try {
+		await client.add(
+			{
+				content: sanitizeMemoryContent(content),
+				containerTag,
+				metadata: {
+					category: options?.category ?? "insight",
+					type: "curated",
+					...(options?.websiteId && { websiteId: options.websiteId }),
+				},
+				entityContext:
+					"Curated user insight or preference. Store as a durable fact about this user.",
 			},
-			entityContext:
-				"Curated user insight or preference. Store as a durable fact about this user.",
-		})
-		.catch(() => {});
+			{ timeout: 4000, maxRetries: 0 }
+		);
+		return { saved: true, status: "accepted" };
+	} catch {
+		return { saved: false, status: "failed" };
+	}
 }
 
 export async function searchMemories(
@@ -234,23 +248,6 @@ export async function searchMemories(
 		return [];
 	}
 
-	const filters = options?.websiteId
-		? {
-				OR: [
-					{
-						key: "websiteId",
-						value: options.websiteId,
-						filterType: "metadata" as const,
-					},
-					{
-						key: "type",
-						value: "curated",
-						filterType: "metadata" as const,
-					},
-				],
-			}
-		: undefined;
-
 	try {
 		const { results } = await client.search.memories({
 			q: query,
@@ -258,7 +255,7 @@ export async function searchMemories(
 			searchMode: "hybrid",
 			limit: options?.limit ?? 5,
 			threshold: options?.threshold ?? 0.4,
-			...(filters && { filters }),
+			filters: recallFilters(options?.websiteId),
 		});
 
 		return results
@@ -311,26 +308,39 @@ export async function forgetMemory(
 	}
 }
 
-function sanitizeMemoryString(value: string): string {
-	return sanitizeMemoryContent(value, Number.POSITIVE_INFINITY);
-}
-
 export function formatMemoryForPrompt(ctx: MemoryContext): string {
 	const parts: string[] = [];
-
-	if (ctx.staticProfile.length > 0) {
-		parts.push(
-			`User profile:\n${ctx.staticProfile.map(sanitizeMemoryString).join("\n")}`
-		);
+	let included = 0;
+	let omitted = 0;
+	const sections: [string, string[]][] = [
+		["User profile", ctx.staticProfile],
+		["Recent context", ctx.dynamicProfile],
+		["Relevant memories", ctx.relevantMemories],
+	];
+	for (const [label, values] of sections) {
+		const memories: string[] = [];
+		for (const value of values) {
+			if (!value.trim()) {
+				continue;
+			}
+			if (included >= MAX_PROMPT_MEMORIES || value.length > MAX_MEMORY_LENGTH) {
+				omitted += 1;
+				continue;
+			}
+			// Omit oversized records intact: cutting a definition can lose an exclusion.
+			const sanitized = sanitizeMemoryContent(value);
+			if (sanitized.trim()) {
+				memories.push(sanitized);
+				included += 1;
+			}
+		}
+		if (memories.length) {
+			parts.push(`${label}:\n${memories.join("\n")}`);
+		}
 	}
-	if (ctx.dynamicProfile.length > 0) {
+	if (omitted) {
 		parts.push(
-			`Recent context:\n${ctx.dynamicProfile.map(sanitizeMemoryString).join("\n")}`
-		);
-	}
-	if (ctx.relevantMemories.length > 0) {
-		parts.push(
-			`Relevant memories:\n${ctx.relevantMemories.filter(Boolean).map(sanitizeMemoryString).join("\n")}`
+			`${omitted} memories omitted to fit the context budget. This is a partial recall, not evidence that other memories do not exist.`
 		);
 	}
 

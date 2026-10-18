@@ -1,31 +1,34 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import Supermemory from "supermemory";
 
 const originalApiKey = process.env.SUPERMEMORY_API_KEY;
 process.env.SUPERMEMORY_API_KEY = "test_supermemory_key";
 
-interface AddInput {
-	containerTag?: string;
-	containerTags?: string[];
-	metadata?: Record<string, unknown>;
-}
-interface ProfileInput {
-	containerTag: string;
-}
-interface SearchInput {
-	containerTag: string;
-	filters?: unknown;
-	searchMode?: string;
-}
+type AddInput = Supermemory.AddParams;
+type ProfileInput = Supermemory.ProfileParams;
+type SearchInput = Supermemory.SearchMemoriesParams;
 
-const defaultProfile = () => ({
+const defaultProfile = (): Supermemory.ProfileResponse => ({
 	profile: { dynamic: [], static: [] },
-	searchResults: { results: [] },
+	searchResults: { results: [], total: 0, timing: 0 },
 });
 
 let profileHandler = async (_input: ProfileInput) => defaultProfile();
-let searchHandler = async (_input: SearchInput) => ({ results: [] });
+let searchHandler = async (
+	_input: SearchInput
+): Promise<Supermemory.SearchMemoriesResponse> => ({
+	results: [],
+	total: 0,
+	timing: 0,
+});
+let addHandler = async (
+	_input: AddInput
+): Promise<Supermemory.AddResponse> => ({
+	id: "synthetic-memory",
+	status: "queued",
+});
 
-const mockAdd = mock(async (_input: AddInput) => undefined);
+const mockAdd = mock((input: AddInput) => addHandler(input));
 const mockForget = mock(async () => undefined);
 const mockProfile = mock((input: ProfileInput) => profileHandler(input));
 const mockSearchMemories = mock((input: SearchInput) => searchHandler(input));
@@ -35,27 +38,64 @@ const mockClient = {
 	profile: mockProfile,
 	search: { memories: mockSearchMemories },
 };
+let memoryClient: Supermemory | typeof mockClient | null = mockClient;
 // Mock this feature's shared client, not the SDK constructor used by native
 // transport tests in the same Bun process.
 const businessMemory = await import("@databuddy/services/business-memory");
 mock.module("@databuddy/services/business-memory", () => ({
 	...businessMemory,
-	getMemoryClient: () => mockClient,
+	getMemoryClient: () => memoryClient,
 }));
 
 const {
 	asksToForget,
 	asksToRemember,
 	forgetMemory,
+	formatMemoryForPrompt,
 	getMemoryContext,
+	saveCuratedMemory,
 	searchMemories,
 	storeConversation,
 } = await import("./supermemory");
 const { createMemoryTools } = await import("../ai/tools/memory");
 
+describe("recalled memory budgets", () => {
+	test("bounds recalled entries across all profile sections", () => {
+		const output = formatMemoryForPrompt({
+			staticProfile: Array.from(
+				{ length: 30 },
+				(_, index) => `MEMORY_ENTRY_${index}`
+			),
+			dynamicProfile: [],
+			relevantMemories: [],
+		});
+		expect(output.match(/MEMORY_ENTRY_/g)).toHaveLength(10);
+		expect(output).toContain("omitted");
+	});
+
+	test("omits oversized memories intact instead of truncating their qualifiers", () => {
+		const output = formatMemoryForPrompt({
+			staticProfile: [
+				"Oversized definition: " +
+					"x".repeat(2000) +
+					" Do not count employees.",
+			],
+			dynamicProfile: ["Count only completed downloads; exclude employees."],
+			relevantMemories: [],
+		});
+		expect(output).not.toContain("Oversized definition");
+		expect(output).toContain(
+			"Count only completed downloads; exclude employees."
+		);
+		expect(output).toContain("omitted");
+	});
+});
+
 beforeEach(() => {
+	memoryClient = mockClient;
+	addHandler = async () => ({ id: "synthetic-memory", status: "queued" });
 	profileHandler = async () => defaultProfile();
-	searchHandler = async () => ({ results: [] });
+	searchHandler = async () => ({ results: [], total: 0, timing: 0 });
 	mockAdd.mockClear();
 	mockForget.mockClear();
 	mockProfile.mockClear();
@@ -146,6 +186,8 @@ describe("supermemory containers", () => {
 			},
 			searchResults: {
 				results: [{ memory: `memory:${containerTag}` }],
+				total: 1,
+				timing: 0,
 			},
 		});
 
@@ -166,9 +208,23 @@ describe("supermemory containers", () => {
 	test("searches only the caller's own container, scoped to the website", async () => {
 		searchHandler = async () => ({
 			results: [
-				{ memory: "older memory", similarity: 0.5 },
-				{ chunk: "pricing chunk", similarity: 0.8 },
+				{
+					id: "older",
+					memory: "older memory",
+					similarity: 0.5,
+					metadata: null,
+					updatedAt: "2026-10-01T00:00:00Z",
+				},
+				{
+					id: "pricing",
+					chunk: "pricing chunk",
+					similarity: 0.8,
+					metadata: null,
+					updatedAt: "2026-10-01T00:00:00Z",
+				},
 			],
+			total: 2,
+			timing: 0,
 		});
 
 		const results = await searchMemories("pricing", "usr_1", null, {
@@ -187,14 +243,94 @@ describe("supermemory containers", () => {
 			{ memory: "older memory", similarity: 0.5 },
 		]);
 	});
+	test.each([
+		"site_1",
+		undefined,
+	])("recalls personal preferences and only the current website's project facts: %s", async (websiteId) => {
+		const memories = [
+			{
+				memory: "Prefers weekly views",
+				category: "preference",
+				websiteId: "site_2",
+			},
+			{
+				memory: "Site one excludes employees",
+				category: "context",
+				websiteId: "site_1",
+			},
+			{
+				memory: "Site two includes employees",
+				category: "context",
+				websiteId: "site_2",
+			},
+			{ memory: "Legacy unscoped business definition", category: "insight" },
+		];
+		const filtered = (filters: ProfileInput["filters"]) =>
+			memories.filter((memory) => {
+				if (!(filters && "OR" in filters)) {
+					return true;
+				}
+				return filters.OR.some(
+					(condition) =>
+						"key" in condition &&
+						(condition.key === "category"
+							? memory.category === condition.value
+							: condition.key === "websiteId" &&
+								memory.websiteId === condition.value)
+				);
+			});
+		profileHandler = async ({ filters }) => ({
+			profile: {
+				static: filtered(filters).map(({ memory }) => memory),
+				dynamic: [],
+			},
+			searchResults: { results: [], total: 0, timing: 0 },
+		});
+		searchHandler = async ({ filters }) => ({
+			results: filtered(filters).map(({ memory }) => ({
+				id: memory,
+				memory,
+				similarity: 1,
+				metadata: null,
+				updatedAt: "2026-10-01T00:00:00Z",
+			})),
+			total: filtered(filters).length,
+			timing: 0,
+		});
+		const expected = websiteId
+			? ["Prefers weekly views", "Site one excludes employees"]
+			: ["Prefers weekly views"];
+		expect(
+			(
+				await getMemoryContext("employee exclusions", "usr_1", null, {
+					websiteId,
+				})
+			).staticProfile
+		).toEqual(expected);
+		expect(
+			(
+				await searchMemories("employee exclusions", "usr_1", null, {
+					websiteId,
+				})
+			).map(({ memory }) => memory)
+		).toEqual(expected);
+	});
 });
 
 describe("forgetting memory", () => {
 	test("forgets an exact match from the caller's own container", async () => {
 		searchHandler = async () => ({
 			results: [
-				{ id: "mem_1", memory: "Prefers weekly views", similarity: 0.9 },
+				{
+					id: "mem_1",
+					memory: "Prefers weekly views",
+					similarity: 0.9,
+					metadata: null,
+					updatedAt: "2026-10-01T00:00:00Z",
+				},
 			],
+			total: 1,
+			timing: 0,
 		});
 
 		expect(await forgetMemory("Prefers weekly views", null, "key_1")).toEqual({
@@ -220,8 +356,12 @@ describe("forgetting memory", () => {
 					id: "mem_1",
 					memory: "Prefers weekly views in traffic reports",
 					similarity: 0.6,
+					metadata: null,
+					updatedAt: "2026-10-01T00:00:00Z",
 				},
 			],
+			total: 1,
+			timing: 0,
 		});
 
 		expect(await forgetMemory("weekly views", "usr_1", null)).toEqual({
@@ -308,15 +448,97 @@ describe("save_memory tool", () => {
 	test("saves an explicit request to the caller's own container", async () => {
 		expect(await save("Remember that I prefer weekly views")).toEqual({
 			saved: true,
+			status: "accepted",
 		});
-		expect(mockAdd).toHaveBeenCalledWith(
-			expect.objectContaining({
-				containerTag: "user_usr_1",
-				metadata: expect.objectContaining({
-					type: "curated",
-					websiteId: "site_1",
-				}),
-			})
-		);
+		expect(mockAdd.mock.calls[0]?.[0]).toMatchObject({
+			containerTag: "user_usr_1",
+			metadata: { type: "curated", websiteId: "site_1" },
+		});
 	});
+	test("waits for acceptance instead of acknowledging a pending write", async () => {
+		let accept = (_response: Supermemory.AddResponse) => {};
+		const pending = new Promise<Supermemory.AddResponse>((resolve) => {
+			accept = resolve;
+		});
+		addHandler = () => pending;
+		let acknowledged = false;
+		const result = Promise.resolve(
+			save("Remember that I prefer weekly views")
+		).then((receipt) => {
+			acknowledged = true;
+			return receipt;
+		});
+		await Promise.resolve();
+		expect(acknowledged).toBe(false);
+		accept({ id: "accepted-memory", status: "queued" });
+		expect(await result).toEqual({ saved: true, status: "accepted" });
+	});
+	test("does not claim a rejected write was saved or expose provider errors", async () => {
+		addHandler = async () => {
+			throw new Error("private provider response");
+		};
+		expect(await save("Remember that I prefer weekly views")).toEqual({
+			saved: false,
+			status: "failed",
+		});
+	});
+	test("reports no client or caller identity as unavailable", async () => {
+		memoryClient = null;
+		expect(await save("Remember that I prefer weekly views")).toEqual({
+			saved: false,
+			status: "unavailable",
+		});
+		memoryClient = mockClient;
+		expect(await saveCuratedMemory("Personal preference", null, null)).toEqual({
+			saved: false,
+			status: "unavailable",
+		});
+		expect(mockAdd).not.toHaveBeenCalled();
+	});
+	test("keeps dry-run writes blocked and requires a current website for project facts", async () => {
+		for (const [category, context, expected] of [
+			[
+				"preference",
+				{ mutationMode: "dry-run" },
+				{ saved: false, dryRun: true },
+			],
+			["context", {}, { saved: false, status: "unavailable" }],
+		] as const) {
+			const result = await tools.save_memory?.execute?.(
+				{ content: "Exclude employees", category },
+				{
+					toolCallId: "save",
+					messages: [],
+					experimental_context: {
+						latestUserMessage: "Remember to exclude employees",
+						userId: "usr_1",
+						...context,
+					},
+				}
+			);
+			expect(result).toMatchObject(expected);
+		}
+		expect(mockAdd).not.toHaveBeenCalled();
+	});
+	test("uses the native SDK deadline and reports a stalled write as failed", async () => {
+		let attempts = 0;
+		memoryClient = new Supermemory({
+			apiKey: "inert-test-key",
+			fetch: async (_url, init) => {
+				attempts++;
+				return new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener(
+						"abort",
+						() => reject(new DOMException("Aborted", "AbortError")),
+						{ once: true }
+					);
+				});
+			},
+		});
+		expect(await save("Remember that I prefer weekly views")).toEqual({
+			saved: false,
+			status: "failed",
+		});
+		expect(attempts).toBe(1);
+	}, 6000);
 });

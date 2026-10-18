@@ -114,12 +114,13 @@ function refreshAgentContextSnapshot(
 
 const getMemoryContextInner = async (
 	query: string,
-	userId: string
+	userId: string,
+	websiteId?: string
 ): Promise<MemoryContext> => {
 	if (!(isMemoryEnabled() && query)) {
 		return EMPTY_MEMORY;
 	}
-	const result = await getMemoryContext(query, userId, null);
+	const result = await getMemoryContext(query, userId, null, { websiteId });
 	return result ?? EMPTY_MEMORY;
 };
 

@@ -89,9 +89,12 @@ export function createMemoryTools(): Record<string, Tool> {
 				category: z
 					.enum(["preference", "insight", "pattern", "alert", "context"])
 					.optional()
-					.default("insight"),
+					.default("insight")
+					.describe(
+						"Use preference only for personal names or display preferences shared across websites; other categories are project facts for the current website."
+					),
 			}),
-			execute: (args, options) => {
+			execute: async (args, options) => {
 				const {
 					apiKeyId,
 					latestUserMessage,
@@ -113,11 +116,17 @@ export function createMemoryTools(): Record<string, Tool> {
 						saved: false,
 					};
 				}
-				saveCuratedMemory(args.content, memoryUserId, apiKeyId, {
+				if (args.category !== "preference" && !websiteId) {
+					return {
+						saved: false,
+						status: "unavailable",
+						message: "Choose a website before saving a project fact.",
+					};
+				}
+				return await saveCuratedMemory(args.content, memoryUserId, apiKeyId, {
 					category: args.category ?? "insight",
 					websiteId: websiteId ?? undefined,
 				});
-				return { saved: true };
 			},
 		}),
 		forget_memory: tool({
