@@ -43,7 +43,7 @@ export function useProfileRevenue(
 		}
 	);
 
-	return { transactions: query.data.profile_revenue ?? [] };
+	return { ...query, transactions: query.data.profile_revenue ?? [] };
 }
 
 function fallbackSessionId(
@@ -162,5 +162,7 @@ export function useUserProfile(
 		isLoading: profileQuery.isLoading || sessionsQuery.isLoading,
 		isError: profileQuery.isError || sessionsQuery.isError,
 		error: profileQuery.error || sessionsQuery.error,
+		refetch: () =>
+			Promise.all([profileQuery.refetch(), sessionsQuery.refetch()]),
 	};
 }

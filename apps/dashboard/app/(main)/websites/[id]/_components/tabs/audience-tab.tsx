@@ -125,8 +125,13 @@ export function WebsiteAudienceTab({
 		[filters]
 	);
 
-	const { results: batchResults, isLoading: isBatchLoading } =
-		useBatchDynamicQuery(websiteId, dateRange, batchQueries);
+	const {
+		results: batchResults,
+		isLoading: isBatchLoading,
+		isError,
+		refetch,
+		getDataForQuery,
+	} = useBatchDynamicQuery(websiteId, dateRange, batchQueries);
 
 	const geographicData = useMemo(
 		() =>
@@ -308,7 +313,20 @@ export function WebsiteAudienceTab({
 		[addFilter]
 	);
 
-	const resolutions: ViewportEntry[] = deviceData.screen_resolution || [];
+	const resolutions = getDataForQuery<ViewportEntry>(
+		"device-data",
+		"screen_resolution"
+	);
+	if (isError) {
+		return (
+			<EmptyState
+				action={{ label: "Try again", onClick: () => refetch() }}
+				className="p-8"
+				title="Audience data unavailable"
+				variant="error"
+			/>
+		);
+	}
 
 	return (
 		<div className="space-y-4">

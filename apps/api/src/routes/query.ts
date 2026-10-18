@@ -14,13 +14,7 @@ import {
 } from "@databuddy/api-keys/resolve";
 import { and, db, eq, inArray } from "@databuddy/db";
 import { profiles } from "@databuddy/db/schema";
-import {
-	isTraitFilterField,
-	resolveTraitSegment,
-	revealPii,
-	type TraitFilter,
-	TraitFilterError,
-} from "@databuddy/services/identity";
+import { isTraitFilterField, revealPii } from "@databuddy/services/identity";
 import { validateTimezone } from "@databuddy/validation";
 import { readBooleanEnv } from "@databuddy/env/app";
 import { getRateLimitHeaders, ratelimit } from "@databuddy/redis/rate-limit";
@@ -28,7 +22,8 @@ import {
 	allowedFilterFields,
 	compileQuery,
 	executeBatch,
-	isFilterFieldAllowed,
+	invalidFilterFieldError,
+	publicQueryErrorMessage,
 	queryPlanGateError,
 	truncateQueryErrorForLog,
 } from "@databuddy/ai/query";
@@ -41,7 +36,7 @@ import {
 	isNormalizedQueryDate,
 	normalizeClickHouseDateTime,
 } from "@databuddy/ai/query/date-utils";
-import type { Filter, QueryRequest } from "@databuddy/ai/query/types";
+import type { QueryRequest } from "@databuddy/ai/query/types";
 import { Elysia, t } from "elysia";
 import { getAccessibleWebsites } from "@databuddy/ai/lib/accessible-websites";
 import { getWebsiteDomain } from "@databuddy/ai/lib/website-utils";
@@ -94,10 +89,6 @@ async function runPerWebsite<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 const MAX_HOURLY_DAYS = 30;
 const MS_PER_DAY = 86_400_000;
-function normalizeDate(input: string): string {
-	return normalizeClickHouseDateTime(input);
-}
-
 interface ValidationError {
 	field: string;
 	message: string;
@@ -162,7 +153,6 @@ function validateQueryRequest(
 		...validateRequiredDateFields(startDate, endDate, Boolean(request.preset))
 	);
 	errors.push(...validateParsedDateFields(request, { startDate, endDate }));
-	errors.push(...validatePaginationFields(request));
 
 	if (errors.length > 0) {
 		return { valid: false, errors };
@@ -225,8 +215,12 @@ function getExplicitDateRange(
 	request: DynamicQueryRequestType
 ): ResolvedDateRange {
 	return {
-		startDate: request.startDate ? normalizeDate(request.startDate) : undefined,
-		endDate: request.endDate ? normalizeDate(request.endDate) : undefined,
+		startDate: request.startDate
+			? normalizeClickHouseDateTime(request.startDate)
+			: undefined,
+		endDate: request.endDate
+			? normalizeClickHouseDateTime(request.endDate)
+			: undefined,
 	};
 }
 
@@ -280,29 +274,6 @@ function validateParsedDateFields(
 			field: "endDate",
 			message: `Invalid date: ${request.endDate}. Could not parse as a valid date`,
 		});
-	}
-	return errors;
-}
-
-function validatePaginationFields(
-	request: DynamicQueryRequestType
-): ValidationError[] {
-	const errors: ValidationError[] = [];
-	if (request.limit !== undefined) {
-		if (!Number.isInteger(request.limit)) {
-			errors.push({ field: "limit", message: "Limit must be an integer" });
-		} else if (request.limit < 1) {
-			errors.push({ field: "limit", message: "Limit must be at least 1" });
-		} else if (request.limit > 10_000) {
-			errors.push({ field: "limit", message: "Limit cannot exceed 10000" });
-		}
-	}
-	if (request.page !== undefined) {
-		if (!Number.isInteger(request.page)) {
-			errors.push({ field: "page", message: "Page must be an integer" });
-		} else if (request.page < 1) {
-			errors.push({ field: "page", message: "Page must be at least 1" });
-		}
 	}
 	return errors;
 }
@@ -884,17 +855,7 @@ async function executeDynamicQuery(
 	projectType: ProjectType,
 	timezone: string,
 	scope?: { organizationWebsiteIds?: string[] }
-): Promise<{
-	queryId: string;
-	data: QueryResult[];
-	meta: {
-		parameters: (string | Record<string, unknown>)[];
-		total_parameters: number;
-		page: number;
-		limit: number;
-		filters_applied: number;
-	};
-}> {
+): Promise<QueryResult[]> {
 	const { startDate: from, endDate: to } = request;
 	const limit = request.limit ?? 100;
 	const page = request.page ?? 1;
@@ -906,48 +867,11 @@ async function executeDynamicQuery(
 			? (scope?.organizationWebsiteIds ?? [])
 			: undefined;
 
-	const requestFilters = (request.filters || []) as Filter[];
-	const traitFilters = requestFilters.filter((f) =>
-		isTraitFilterField(f.field)
-	);
-	let effectiveFilters = requestFilters;
-	let traitError: string | null = null;
-	if (traitFilters.length > 0) {
-		if (projectType === "website") {
-			try {
-				const segment = await resolveTraitSegment(
-					projectId,
-					traitFilters as TraitFilter[]
-				);
-				effectiveFilters = [
-					...requestFilters.filter((f) => !isTraitFilterField(f.field)),
-					{ field: "profile_id", op: "in", value: segment },
-				];
-			} catch (error) {
-				if (error instanceof TraitFilterError) {
-					traitError = error.message;
-				} else {
-					captureError(error, {
-						route: "v1/query",
-						step: "resolve_trait_segment",
-					});
-					traitError = "Trait filter failed";
-				}
-			}
-		} else {
-			traitError = "Trait filters are only supported for website queries";
-		}
-	}
-
-	// Org-level custom_events queries: builder scans by owner_id (= organizationId
-	// set at ingestion) via primary key instead of matching website_id.
-	const hasCustomEventsQueries = request.parameters.some((param) => {
-		const name = typeof param === "string" ? param : param.name;
-		return name.startsWith("custom_event");
-	});
-
-	const isOrgCustomEvents =
-		projectType === "organization" && hasCustomEventsQueries;
+	const traitError =
+		projectType !== "website" &&
+		request.filters?.some((filter) => isTraitFilterField(filter.field))
+			? "Trait filters are only supported for website queries"
+			: null;
 
 	type PreparedParameter =
 		| { id: string; error: string }
@@ -955,8 +879,8 @@ async function executeDynamicQuery(
 
 	const prepared: PreparedParameter[] = request.parameters.map((param) => {
 		const { name, id, start, end, granularity } = parseQueryParameter(param);
-		const paramFrom = start ? normalizeDate(start) : from;
-		const paramTo = end ? normalizeDate(end) : to;
+		const paramFrom = start ? normalizeClickHouseDateTime(start) : from;
+		const paramTo = end ? normalizeClickHouseDateTime(end) : to;
 
 		const config = getQueryBuilder(name);
 		if (!config) {
@@ -972,11 +896,9 @@ async function executeDynamicQuery(
 		if (traitError) {
 			return { id, error: traitError };
 		}
-		if (
-			traitFilters.length > 0 &&
-			!isFilterFieldAllowed(config, "profile_id")
-		) {
-			return { id, error: `Trait filters are not supported for ${name}` };
+		const filterError = invalidFilterFieldError(name, request.filters);
+		if (filterError) {
+			return { id, error: filterError };
 		}
 
 		if (
@@ -1011,15 +933,11 @@ async function executeDynamicQuery(
 					paramFrom,
 					paramTo
 				),
-				filters: effectiveFilters.filter((f) =>
-					isFilterFieldAllowed(config, f.field)
-				),
+				filters: request.filters,
 				limit,
 				offset: (page - 1) * limit,
 				timezone,
-				organizationWebsiteIds: isOrgCustomEvents
-					? (organizationWebsiteIds ?? [])
-					: organizationWebsiteIds,
+				organizationWebsiteIds,
 				orderBy,
 			},
 		};
@@ -1029,20 +947,7 @@ async function executeDynamicQuery(
 		(p): p is { id: string; request: QueryRequest & { type: string } } =>
 			"request" in p
 	);
-	const errorParameters = prepared.filter(
-		(p): p is { id: string; error: string } => "error" in p
-	);
-
 	const resultMap = new Map<string, QueryResult>();
-
-	for (const errorParam of errorParameters) {
-		resultMap.set(errorParam.id, {
-			parameter: errorParam.id,
-			success: false,
-			error: errorParam.error,
-			data: [],
-		});
-	}
 
 	if (validParameters.length > 0) {
 		const results = await runPerWebsite(projectId, () =>
@@ -1056,8 +961,9 @@ async function executeDynamicQuery(
 			const param = validParameters[i];
 			const result = results[i];
 			if (param) {
-				if (result?.error) {
-					captureError(new Error(truncateQueryErrorForLog(result.error)), {
+				const error = result ? result.error : QUERY_EXECUTION_ERROR_MESSAGE;
+				if (error) {
+					captureError(new Error(truncateQueryErrorForLog(error)), {
 						query_type: param.request.type,
 						route: "v1/query",
 						step: "execute_batch",
@@ -1065,9 +971,9 @@ async function executeDynamicQuery(
 				}
 				resultMap.set(param.id, {
 					parameter: param.id,
-					success: !result?.error,
+					success: !error,
 					data: result?.data || [],
-					error: result?.error ? QUERY_EXECUTION_ERROR_MESSAGE : undefined,
+					error: error ? publicQueryErrorMessage(error) : undefined,
 				});
 			}
 		}
@@ -1089,39 +995,18 @@ async function executeDynamicQuery(
 		}
 	}
 
-	const allResults = prepared.map(
-		(p) =>
-			resultMap.get(p.id) || {
-				parameter: p.id,
-				success: false,
-				error: "Unknown",
-				data: [],
-			}
-	);
-
-	const sortedResults = allResults.sort((a, b) => {
-		const aIsError = !a.success;
-		const bIsError = !b.success;
-		if (!aIsError && bIsError) {
-			return -1;
-		}
-		if (aIsError && !bIsError) {
-			return 1;
-		}
-		return 0;
-	});
-
-	return {
-		queryId: request.id || "",
-		data: sortedResults,
-		meta: {
-			parameters: request.parameters as (string | Record<string, unknown>)[],
-			total_parameters: request.parameters.length,
-			page,
-			limit,
-			filters_applied: request.filters?.length || 0,
-		},
-	};
+	return prepared
+		.map((param) =>
+			"error" in param
+				? { parameter: param.id, success: false, error: param.error, data: [] }
+				: (resultMap.get(param.id) ?? {
+						parameter: param.id,
+						success: false,
+						error: QUERY_EXECUTION_ERROR_MESSAGE,
+						data: [],
+					})
+		)
+		.sort((a, b) => Number(b.success) - Number(a.success));
 }
 
 export const query = new Elysia({ prefix: "/v1/query" })
@@ -1317,7 +1202,6 @@ export const query = new Elysia({ prefix: "/v1/query" })
 		}) =>
 			(async () => {
 				const requestId = getRequestId(request);
-				const timezone = validateTimezone(q.timezone) || "UTC";
 				const rateLimited = await enforceQueryRateLimit(
 					ctx,
 					"execute",
@@ -1387,102 +1271,73 @@ export const query = new Elysia({ prefix: "/v1/query" })
 					}),
 				});
 
-				if (isBatch) {
-					for (let i = 0; i < body.length; i++) {
-						const req = body[i];
-						if (req) {
-							const validation = validateQueryRequest(req, timezone);
-							if (!validation.valid) {
-								return createValidationErrorResponse(
-									validation.errors.map((e) => ({
-										...e,
-										field: `batch[${i}].${e.field}`,
-									})),
-									requestId
-								);
-							}
-						}
+				const requests = Array.isArray(body) ? body : [body];
+				const resolvedRequests: {
+					request: DynamicQueryRequestType;
+					timezone: string;
+				}[] = [];
+				for (const [index, req] of requests.entries()) {
+					const timezone =
+						validateTimezone(q.timezone ?? req.timeZone) || "UTC";
+					const validation = validateQueryRequest(req, timezone);
+					if (!validation.valid) {
+						return createValidationErrorResponse(
+							validation.errors.map((error) => ({
+								...error,
+								field: isBatch ? `batch[${index}].${error.field}` : error.field,
+							})),
+							requestId
+						);
 					}
-
-					const results = await Promise.all(
-						body.map((req) => {
-							const validation = validateQueryRequest(req, timezone);
-							if (!validation.valid) {
-								return {
-									queryId: req.id,
-									data: [],
-									meta: {
-										parameters: req.parameters,
-										total_parameters: req.parameters.length,
-										page: req.page ?? 1,
-										limit: req.limit ?? 100,
-										filters_applied: req.filters?.length || 0,
-									},
-								};
-							}
-							const resolvedReq = {
-								...req,
-								startDate: validation.startDate,
-								endDate: validation.endDate,
-							};
-							return executeDynamicQuery(
-								resolvedReq,
-								accessResult.projectId,
-								accessResult.projectType,
-								timezone,
-								organizationScope
-							).catch((error) => {
-								captureError(error, {
-									query_id: req.id,
-									route: "v1/query",
-									step: "execute_dynamic_query",
-								});
-								return {
-									queryId: req.id,
-									data: [
-										{
-											parameter: req.parameters[0] as string,
-											success: false,
-											error: QUERY_EXECUTION_ERROR_MESSAGE,
-											data: [],
-										},
-									],
-									meta: {
-										parameters: req.parameters,
-										total_parameters: req.parameters.length,
-										page: req.page ?? 1,
-										limit: req.limit ?? 100,
-										filters_applied: req.filters?.length || 0,
-									},
-								};
-							});
-						})
-					);
-					return { success: true, requestId, batch: true, results };
-				}
-
-				const validation = validateQueryRequest(body, timezone);
-				if (!validation.valid) {
-					return createValidationErrorResponse(validation.errors, requestId);
-				}
-
-				const resolvedBody = {
-					...body,
-					startDate: validation.startDate,
-					endDate: validation.endDate,
-				};
-
-				return {
-					success: true,
-					requestId,
-					...(await executeDynamicQuery(
-						resolvedBody,
-						accessResult.projectId,
-						accessResult.projectType,
+					resolvedRequests.push({
+						request: {
+							...req,
+							startDate: validation.startDate,
+							endDate: validation.endDate,
+						},
 						timezone,
-						organizationScope
-					)),
-				};
+					});
+				}
+
+				const results = await Promise.all(
+					resolvedRequests.map(async ({ request: req, timezone }) => {
+						const data = await executeDynamicQuery(
+							req,
+							accessResult.projectId,
+							accessResult.projectType,
+							timezone,
+							organizationScope
+						).catch((error) => {
+							captureError(error, {
+								query_id: req.id,
+								route: "v1/query",
+								step: "execute_dynamic_query",
+							});
+							return req.parameters.map((parameter) => ({
+								parameter: parseQueryParameter(parameter).id,
+								success: false,
+								error: QUERY_EXECUTION_ERROR_MESSAGE,
+								data: [],
+							}));
+						});
+						return {
+							queryId: req.id || "",
+							data,
+							meta: {
+								parameters: req.parameters,
+								total_parameters: req.parameters.length,
+								page: req.page ?? 1,
+								limit: req.limit ?? 100,
+								filters_applied: data.some((result) => result.success)
+									? (req.filters?.length ?? 0)
+									: 0,
+							},
+						};
+					})
+				);
+				return isBatch
+					? { success: true, requestId, batch: true, results }
+					: { success: true, requestId, ...results[0] };
 			})(),
 		{
 			body: t.Union([

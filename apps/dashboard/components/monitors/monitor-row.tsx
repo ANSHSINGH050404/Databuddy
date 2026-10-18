@@ -234,24 +234,31 @@ export function useUptimeHeatmap(
 	days: number,
 	enabled = true
 ) {
-	const { getDataForQuery, isLoading } = useBatchDynamicQuery(
-		schedule.websiteId
-			? { websiteId: schedule.websiteId }
-			: { scheduleId: schedule.id },
-		{
-			start_date: localDayjs()
-				.subtract(days - 1, "day")
-				.startOf("day")
-				.format("YYYY-MM-DD"),
-			end_date: localDayjs().startOf("day").format("YYYY-MM-DD"),
-			granularity: "daily",
-		},
-		HEATMAP_QUERIES,
-		{ enabled }
-	);
+	const { getDataForQuery, isLoading, isError, error, refetch } =
+		useBatchDynamicQuery(
+			schedule.websiteId
+				? { websiteId: schedule.websiteId }
+				: { scheduleId: schedule.id },
+			{
+				start_date: localDayjs()
+					.subtract(days - 1, "day")
+					.startOf("day")
+					.format("YYYY-MM-DD"),
+				end_date: localDayjs().startOf("day").format("YYYY-MM-DD"),
+				granularity: "daily",
+			},
+			HEATMAP_QUERIES,
+			{ enabled }
+		);
 	return {
-		data: getDataForQuery("uptime-heatmap", "uptime_time_series"),
+		data: getDataForQuery<Parameters<typeof buildUptimeHeatmapDays>[0][number]>(
+			"uptime-heatmap",
+			"uptime_time_series"
+		),
 		isLoading,
+		isError,
+		error,
+		refetch,
 	};
 }
 
@@ -262,7 +269,7 @@ function MiniHeatmap({
 	schedule: MonitorActionTarget;
 	isActive: boolean;
 }) {
-	const { data, isLoading } = useUptimeHeatmap(
+	const { data, isLoading, isError } = useUptimeHeatmap(
 		schedule,
 		HEATMAP_DAYS,
 		isActive
@@ -292,6 +299,9 @@ function MiniHeatmap({
 		);
 	}
 
+	if (isError) {
+		return <span className="text-muted-foreground text-xs">Unavailable</span>;
+	}
 	if (isLoading) {
 		return (
 			<>

@@ -716,12 +716,9 @@ function McpAnalytics({ organizationId }: { organizationId?: string }) {
 					: 10 * 60 * 1000,
 		}
 	);
-	const summary: Summary | undefined = getDataForQuery(
-		"summary",
-		"mcp_summary"
-	)[0];
+	const summary = getDataForQuery<Summary>("summary", "mcp_summary")[0];
 	const facets: Summary | undefined =
-		getDataForQuery("facets", "mcp_summary")[0] ?? summary;
+		getDataForQuery<Summary>("facets", "mcp_summary")[0] ?? summary;
 	const series: SeriesRow[] = getDataForQuery("series", "mcp_calls_series");
 	const tools: ToolRow[] = getDataForQuery("tools", "mcp_tools");
 	const clients: ClientRow[] = getDataForQuery("clients", "mcp_clients");

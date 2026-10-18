@@ -5,6 +5,7 @@ import {
 	getCountryCode,
 } from "@databuddy/shared/country-codes";
 import type { ProfileSession, Session } from "@/types/sessions";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { notFound, useParams, useRouter } from "next/navigation";
 import { type ElementType, type ReactNode, useCallback, useState } from "react";
 import { BrowserIcon, CountryFlag, OSIcon } from "@/components/icon";
@@ -78,21 +79,6 @@ function MetricBar({
 	);
 }
 
-function SectionHeading({
-	icon: Icon,
-	title,
-}: {
-	icon: ElementType;
-	title: string;
-}) {
-	return (
-		<div className="mb-2 flex min-h-7 items-center gap-2">
-			<Icon className="size-4 text-muted-foreground" />
-			<span className="font-semibold text-foreground text-sm">{title}</span>
-		</div>
-	);
-}
-
 function DetailRow({
 	indicator,
 	label,
@@ -125,18 +111,67 @@ function DetailRow({
 function SidebarSection({
 	children,
 	className,
-	icon,
+	icon: Icon,
 	title,
+	query,
+	isEmpty = false,
+	emptyMessage,
 }: {
 	children: ReactNode;
 	icon: ElementType;
 	title: string;
 	className?: string;
+	query?: Pick<
+		UseQueryResult,
+		"isError" | "isLoading" | "isFetching" | "isPaused" | "refetch"
+	>;
+	isEmpty?: boolean;
+	emptyMessage?: string;
 }) {
+	const label = title.toLowerCase();
+	let content = children;
+	if (isEmpty) {
+		let message = emptyMessage;
+		if (query?.isLoading) {
+			message = `Loading ${label}…`;
+		}
+		if (query?.isPaused) {
+			message = `Waiting for a connection to load ${label}.`;
+		}
+		content = query?.isError ? null : (
+			<p
+				className="flex items-center gap-2 text-pretty text-muted-foreground text-xs"
+				role={query?.isLoading || query?.isPaused ? "status" : undefined}
+			>
+				{query?.isLoading && !query.isPaused && <Spinner size="sm" />}
+				{message}
+			</p>
+		);
+	}
 	return (
 		<section className={cn("border-b px-4 py-3 last:border-b-0", className)}>
-			<SectionHeading icon={icon} title={title} />
-			{children}
+			<div className="mb-2 flex min-h-7 items-center gap-2">
+				<Icon className="size-4 text-muted-foreground" />
+				<span className="font-semibold text-foreground text-sm">{title}</span>
+			</div>
+			{query?.isError && (
+				<div className="space-y-2" role="alert">
+					<p className="text-muted-foreground text-xs">
+						Couldn't load {label}.
+						{!isEmpty && " Showing previously loaded data."}
+					</p>
+					<Button
+						aria-label={`Retry ${label}`}
+						loading={query.isFetching}
+						onClick={() => query.refetch()}
+						size="sm"
+						variant="secondary"
+					>
+						Retry
+					</Button>
+				</div>
+			)}
+			{content}
 		</section>
 	);
 }
@@ -158,10 +193,12 @@ function LoadingSkeleton({ onBack }: { onBack: () => void }) {
 function UserProfileState({
 	description,
 	onBack,
+	onRetry,
 	title,
 	variant = "minimal",
 }: {
 	onBack: () => void;
+	onRetry?: () => unknown;
 	description: string;
 	title: string;
 	variant?: "minimal" | "error";
@@ -171,10 +208,13 @@ function UserProfileState({
 			<Header onBack={onBack} />
 			<EmptyState
 				action={
-					<Button onClick={onBack} variant="secondary">
-						<ArrowLeftIcon className="mr-2 size-4" />
-						Back to users
-					</Button>
+					<div className="flex gap-2">
+						{onRetry && <Button onClick={onRetry}>Retry</Button>}
+						<Button onClick={onBack} variant="secondary">
+							<ArrowLeftIcon className="mr-2 size-4" />
+							Back to users
+						</Button>
+					</div>
 				}
 				className="min-h-0 flex-1"
 				description={description}
@@ -345,20 +385,30 @@ function formatTraitValue(value: unknown): string {
 
 function TraitsSection({
 	className,
-	traits,
+	identified,
+	query,
 }: {
 	className?: string;
-	traits: Record<string, unknown> | undefined;
+	identified: boolean;
+	query: ReturnType<typeof useProfileIdentity>;
 }) {
-	const entries = Object.entries(traits ?? {}).sort(([a], [b]) =>
+	const entries = Object.entries(query.data?.traits ?? {}).sort(([a], [b]) =>
 		a.localeCompare(b)
 	);
-	if (entries.length === 0) {
-		return null;
-	}
 
 	return (
-		<SidebarSection className={className} icon={TagIcon} title="Traits">
+		<SidebarSection
+			className={className}
+			icon={TagIcon}
+			title="Traits"
+			emptyMessage={
+				identified
+					? "No traits recorded."
+					: "This visitor has no identified profile."
+			}
+			isEmpty={entries.length === 0}
+			query={query}
+		>
 			{entries.map(([key, value]) => (
 				<div
 					className="flex min-h-10 items-center justify-between gap-3 py-2.5"
@@ -383,14 +433,12 @@ function transactionDotColor(tx: ProfileTransaction) {
 
 function RevenueSection({
 	className,
-	transactions,
+	query,
 }: {
 	className?: string;
-	transactions: ProfileTransaction[];
+	query: ReturnType<typeof useProfileRevenue>;
 }) {
-	if (transactions.length === 0) {
-		return null;
-	}
+	const { transactions } = query;
 
 	const totals = new Map<string, number>();
 	for (const tx of transactions) {
@@ -400,7 +448,14 @@ function RevenueSection({
 	}
 
 	return (
-		<SidebarSection className={className} icon={CoinsIcon} title="Revenue">
+		<SidebarSection
+			className={className}
+			icon={CoinsIcon}
+			title="Revenue"
+			emptyMessage="No attributed transactions in the selected date range."
+			isEmpty={transactions.length === 0}
+			query={query}
+		>
 			{[...totals.entries()].map(([currency, total]) => (
 				<div
 					className="flex min-h-10 items-center justify-between gap-3 py-2.5"
@@ -427,28 +482,23 @@ function RevenueSection({
 	);
 }
 
-interface TraitHistoryEntry {
-	changes: Record<string, { old: unknown; new: unknown }>;
-	createdAt: string | Date;
-	source: string;
-}
-
 function TraitHistorySection({
 	className,
-	history,
+	query,
 }: {
 	className?: string;
-	history: TraitHistoryEntry[];
+	query: ReturnType<typeof useProfileHistory>;
 }) {
-	if (history.length === 0) {
-		return null;
-	}
+	const history = query.data ?? [];
 
 	return (
 		<SidebarSection
 			className={className}
 			icon={ClockCounterClockwiseIcon}
 			title="Trait history"
+			emptyMessage="No trait changes recorded."
+			isEmpty={history.length === 0}
+			query={query}
 		>
 			<div className="flex flex-col gap-3">
 				{history.map((entry, index) => (
@@ -503,7 +553,6 @@ function Header({
 		? getCountryCode(userProfile.country || "")
 		: "";
 	const countryName = formatCountryName(userProfile?.country);
-	const isReturning = (userProfile?.total_sessions ?? 0) > 1;
 
 	return (
 		<div className="flex h-12 shrink-0 items-center border-b bg-background">
@@ -550,9 +599,10 @@ function Header({
 						</div>
 					</div>
 					<div className="flex items-center gap-1.5 text-xs">
-						<StatusDot color={isReturning ? "success" : "muted"} size="sm" />
+						<StatusDot color="muted" size="sm" />
 						<span className="font-medium text-foreground">
-							{isReturning ? "Returning" : "New"}
+							{userProfile.total_sessions}{" "}
+							{userProfile.total_sessions === 1 ? "session" : "sessions"}
 						</span>
 					</div>
 				</div>
@@ -579,20 +629,20 @@ export default function UserDetailPage() {
 		new Set()
 	);
 
-	const { userProfile, isLoading, isError, error } = useUserProfile(
+	const { userProfile, isLoading, isError, error, refetch } = useUserProfile(
 		websiteId,
 		userId,
 		dateRange
 	);
-	const { data: identity } = useProfileIdentity(
+	const identityQuery = useProfileIdentity(
 		websiteId,
 		userProfile?.profile_id ?? ""
 	);
-	const { data: traitHistory } = useProfileHistory(
+	const historyQuery = useProfileHistory(
 		websiteId,
 		userProfile?.profile_id ?? ""
 	);
-	const { transactions } = useProfileRevenue(websiteId, userId, dateRange);
+	const revenueQuery = useProfileRevenue(websiteId, userId, dateRange);
 
 	const handleToggleSession = useCallback((sessionId: string) => {
 		setExpandedSessions((prev) => {
@@ -624,6 +674,7 @@ export default function UserDetailPage() {
 				description={error?.message || "Try again later."}
 				onBack={handleBack}
 				title="Failed to load user"
+				onRetry={refetch}
 				variant="error"
 			/>
 		);
@@ -666,7 +717,7 @@ export default function UserDetailPage() {
 	return (
 		<div className="flex h-full flex-col">
 			<Header
-				identity={identity}
+				identity={identityQuery.data}
 				onBack={handleBack}
 				userProfile={userProfile}
 			/>
@@ -683,9 +734,12 @@ export default function UserDetailPage() {
 						))}
 					</div>
 
-					<TraitsSection traits={identity?.traits} />
+					<TraitsSection
+						identified={Boolean(userProfile.profile_id)}
+						query={identityQuery}
+					/>
 
-					<RevenueSection transactions={transactions} />
+					<RevenueSection query={revenueQuery} />
 
 					<WebVitalsSection vitals={webVitals} />
 
@@ -764,7 +818,9 @@ export default function UserDetailPage() {
 						/>
 					</SidebarSection>
 
-					<TraitHistorySection history={traitHistory ?? []} />
+					{userProfile.profile_id && (
+						<TraitHistorySection query={historyQuery} />
+					)}
 				</aside>
 
 				<main className="min-w-0 flex-1 overflow-y-auto">
@@ -781,12 +837,13 @@ export default function UserDetailPage() {
 
 					<TraitsSection
 						className="bg-background lg:hidden"
-						traits={identity?.traits}
+						identified={Boolean(userProfile.profile_id)}
+						query={identityQuery}
 					/>
 
 					<RevenueSection
 						className="bg-background lg:hidden"
-						transactions={transactions}
+						query={revenueQuery}
 					/>
 
 					<WebVitalsSection
@@ -794,10 +851,12 @@ export default function UserDetailPage() {
 						vitals={webVitals}
 					/>
 
-					<TraitHistorySection
-						className="bg-background lg:hidden"
-						history={traitHistory ?? []}
-					/>
+					{userProfile.profile_id && (
+						<TraitHistorySection
+							className="bg-background lg:hidden"
+							query={historyQuery}
+						/>
+					)}
 
 					<div className="sticky top-0 z-10 grid h-[39px] grid-cols-[24px_1fr_120px_80px_60px_60px_70px_80px] items-center gap-2 border-b bg-accent px-3 font-medium text-muted-foreground text-xs shadow-[0_0_0_0.5px_var(--border)] lg:grid-cols-[24px_1fr_120px_80px_100px_60px_60px_70px_80px]">
 						<div />

@@ -72,7 +72,9 @@ vi.mock("@databuddy/services/identity", () => ({
 }));
 vi.mock("@databuddy/ai/query", () => ({
 	allowedFilterFields: () => [],
+	invalidFilterFieldError: () => null,
 	isFilterFieldAllowed: () => true,
+	publicQueryErrorMessage: String,
 	queryPlanGateError: () => Promise.resolve(null),
 	truncateQueryErrorForLog: (value: string) => value,
 	compileQuery: state.compileQuery,

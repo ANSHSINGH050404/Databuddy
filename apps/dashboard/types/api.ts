@@ -57,11 +57,11 @@ export type GoalFilter = DataFilter;
 
 export interface BatchQueryResponse {
 	batch: true;
-	meta: {
+	meta?: {
 		total_queries: number;
 		successful_queries: number;
 		failed_queries: number;
 	};
-	results: (DynamicQueryResponse & { queryId: string })[];
+	results: (Omit<DynamicQueryResponse, "success"> & { queryId: string })[];
 	success: boolean;
 }

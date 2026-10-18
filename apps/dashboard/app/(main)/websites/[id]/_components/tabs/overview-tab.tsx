@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { useMemo } from "react";
 import { formatNumber } from "@/lib/formatters";
+import type { ChartDataRow } from "@/components/charts/metrics-constants";
 import {
 	DeviceTypeCell,
 	EventLimitIndicator,
@@ -105,6 +106,14 @@ interface AnalyticsRowData {
 }
 
 const MIN_PREVIOUS_SESSIONS_FOR_TREND = 5;
+type SummaryMetrics = Pick<
+	ChartDataRow,
+	| "pageviews"
+	| "sessions"
+	| "unique_visitors"
+	| "bounce_rate"
+	| "median_session_duration"
+>;
 const MIN_PREVIOUS_VISITORS_FOR_TREND = 5;
 const MIN_PREVIOUS_PAGEVIEWS_FOR_TREND = 10;
 
@@ -112,7 +121,6 @@ const MIN_PREVIOUS_PAGEVIEWS_FOR_TREND = 10;
 const QUERY_CONFIG = {
 	limit: 100,
 	parameters: {
-		summary: ["summary_metrics", "today_metrics", "events_by_date"] as string[],
 		pages: [
 			"top_pages",
 			"entry_pages",
@@ -177,7 +185,6 @@ export function WebsiteOverviewTab({
 				id: "overview-summary",
 				parameters: [
 					"summary_metrics",
-					"today_metrics",
 					"events_by_date",
 					{
 						name: "summary_metrics",
@@ -245,35 +252,59 @@ export function WebsiteOverviewTab({
 
 	const analytics = {
 		summary:
-			getDataForQuery("overview-summary", "summary_metrics")?.[0] || null,
-		today: getDataForQuery("overview-summary", "today_metrics")?.[0] || null,
-		events_by_date: getDataForQuery("overview-summary", "events_by_date") || [],
-		top_pages: getDataForQuery("overview-pages", "top_pages") || [],
-		entry_pages: getDataForQuery("overview-pages", "entry_pages") || [],
-		exit_pages: getDataForQuery("overview-pages", "exit_pages") || [],
-		page_time_analysis:
-			getDataForQuery("overview-pages", "page_time_analysis") || [],
-		traffic_sources:
-			getDataForQuery("overview-traffic", "traffic_sources") || [],
-		top_referrers: getDataForQuery("overview-traffic", "top_referrers") || [],
-		utm_sources: getDataForQuery("overview-traffic", "utm_sources") || [],
-		utm_mediums: getDataForQuery("overview-traffic", "utm_mediums") || [],
-		utm_campaigns: getDataForQuery("overview-traffic", "utm_campaigns") || [],
-		device_types: getDataForQuery("overview-tech", "device_types") || [],
-		browser_versions: getDataForQuery("overview-tech", "browsers") || [],
-		operating_systems:
-			getDataForQuery("overview-tech", "operating_systems") || [],
+			getDataForQuery<SummaryMetrics>(
+				"overview-summary",
+				"summary_metrics"
+			)?.[0] || null,
+		events_by_date: getDataForQuery<MetricPoint>(
+			"overview-summary",
+			"events_by_date"
+		),
+		top_pages: getDataForQuery("overview-pages", "top_pages"),
+		entry_pages: getDataForQuery("overview-pages", "entry_pages"),
+		exit_pages: getDataForQuery("overview-pages", "exit_pages"),
+		page_time_analysis: getDataForQuery("overview-pages", "page_time_analysis"),
+		traffic_sources: getDataForQuery<AnalyticsRowData>(
+			"overview-traffic",
+			"traffic_sources"
+		),
+		top_referrers: getDataForQuery<AnalyticsRowData>(
+			"overview-traffic",
+			"top_referrers"
+		),
+		utm_sources: getDataForQuery<AnalyticsRowData>(
+			"overview-traffic",
+			"utm_sources"
+		),
+		utm_mediums: getDataForQuery<AnalyticsRowData>(
+			"overview-traffic",
+			"utm_mediums"
+		),
+		utm_campaigns: getDataForQuery<AnalyticsRowData>(
+			"overview-traffic",
+			"utm_campaigns"
+		),
+		device_types: getDataForQuery<TechnologyData>(
+			"overview-tech",
+			"device_types"
+		),
+		browser_versions: getDataForQuery<TechnologyData>(
+			"overview-tech",
+			"browsers"
+		),
+		operating_systems: getDataForQuery<TechnologyData>(
+			"overview-tech",
+			"operating_systems"
+		),
 	};
 
 	const outboundData = {
-		outbound_links:
-			getDataForQuery("overview-outbound", "outbound_links") || [],
-		outbound_domains:
-			getDataForQuery("overview-outbound", "outbound_domains") || [],
+		outbound_links: getDataForQuery("overview-outbound", "outbound_links"),
+		outbound_domains: getDataForQuery("overview-outbound", "outbound_domains"),
 	};
 
 	const geoData = {
-		countries: getDataForQuery("overview-geo", "country") || [],
+		countries: getDataForQuery<AnalyticsRowData>("overview-geo", "country"),
 	};
 
 	const createPercentageCell = () => (info: CellInfo) => {
@@ -715,7 +746,7 @@ export function WebsiteOverviewTab({
 
 	const calculateTrends = useMemo(() => {
 		const currentSummary = analytics.summary;
-		const previousSummary = getDataForQuery(
+		const previousSummary = getDataForQuery<SummaryMetrics>(
 			"overview-summary",
 			"previous_summary_metrics"
 		)?.[0];

@@ -33,6 +33,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { useDateFilters } from "@/hooks/use-date-filters";
+import type { DateRange } from "@/types/analytics";
 import {
 	batchDynamicQueryKeys,
 	fetchDynamicQuery,
@@ -391,7 +392,7 @@ function MonitorDetailBody({
 	title?: string;
 }) {
 	const queryClient = useQueryClient();
-	const { dateRange } = useDateFilters();
+	const { dateRange }: { dateRange: DateRange } = useDateFilters();
 	const [isSheetOpen, setIsSheetOpen] = useState(false);
 	const [isRefreshing, setIsRefreshing] = useState(false);
 	const actions = useMonitorActions(schedule, onRemovedAction);
@@ -423,6 +424,7 @@ function MonitorDetailBody({
 			dateRange.start_date,
 			dateRange.end_date,
 			dateRange.granularity,
+			dateRange.timezone,
 		],
 		initialPageParam: 1,
 		queryFn: async ({ pageParam, signal }) => {
@@ -439,13 +441,13 @@ function MonitorDetailBody({
 				],
 				signal
 			);
-			const result =
-				"results" in response
-					? response.results[0]?.data.find(
-							(r) => r.parameter === "uptime_recent_checks"
-						)
-					: undefined;
-			return (result?.success ? result.data : []) as RecentActivityCheck[];
+			const result = response.results[0]?.data.find(
+				(r) => r.parameter === "uptime_recent_checks"
+			);
+			if (!result?.success) {
+				throw new Error(result?.error || "Failed to load recent checks");
+			}
+			return result.data as RecentActivityCheck[];
 		},
 		getNextPageParam: (lastPage, _pages, lastPageParam) =>
 			lastPage.length === RECENT_CHECKS_PAGE_SIZE
@@ -662,19 +664,43 @@ function MonitorDetailBody({
 				</div>
 
 				<div className="shrink-0 bg-sidebar">
-					<UptimeHeatmap
-						data={heatmap.data}
-						days={90}
-						isLoading={heatmap.isLoading}
-					/>
-					<LatencyChart
-						data={latency.getDataForQuery(
-							"uptime-latency",
-							"uptime_response_time_trends"
-						)}
-						isLoading={latency.isLoading}
-						storageKey={`monitor-latency-${schedule.id}`}
-					/>
+					{heatmap.isError ? (
+						<EmptyState
+							action={{
+								label: "Try again",
+								onClick: () => heatmap.refetch(),
+							}}
+							className="p-4"
+							title="Uptime data unavailable"
+							variant="error"
+						/>
+					) : (
+						<UptimeHeatmap
+							data={heatmap.data}
+							days={90}
+							isLoading={heatmap.isLoading}
+						/>
+					)}
+					{latency.isError ? (
+						<EmptyState
+							action={{
+								label: "Try again",
+								onClick: () => latency.refetch(),
+							}}
+							className="p-4"
+							title="Response time data unavailable"
+							variant="error"
+						/>
+					) : (
+						<LatencyChart
+							data={latency.getDataForQuery(
+								"uptime-latency",
+								"uptime_response_time_trends"
+							)}
+							isLoading={latency.isLoading}
+							storageKey={`monitor-latency-${schedule.id}`}
+						/>
+					)}
 				</div>
 
 				<div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t bg-sidebar">
@@ -682,13 +708,25 @@ function MonitorDetailBody({
 						className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
 						data-scroll-root
 					>
-						<RecentActivity
-							checks={checks}
-							hasMore={hasNextPage}
-							isLoading={recentChecksQuery.isPending}
-							isLoadingMore={isFetchingNextPage}
-							loadMoreRef={loadMoreRef}
-						/>
+						{recentChecksQuery.isError ? (
+							<EmptyState
+								action={{
+									label: "Try again",
+									onClick: () => recentChecksQuery.refetch(),
+								}}
+								className="p-4"
+								title="Recent checks unavailable"
+								variant="error"
+							/>
+						) : (
+							<RecentActivity
+								checks={checks}
+								hasMore={hasNextPage}
+								isLoading={recentChecksQuery.isPending}
+								isLoadingMore={isFetchingNextPage}
+								loadMoreRef={loadMoreRef}
+							/>
+						)}
 					</div>
 				</div>
 			</div>

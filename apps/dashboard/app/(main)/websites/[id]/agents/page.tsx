@@ -2498,6 +2498,7 @@ export default function AgentsPage() {
 		isPending,
 		refetch,
 		results,
+		isError,
 	} = useBatchDynamicQuery(websiteId, dateRange, [
 		{
 			id: "products",
@@ -2718,12 +2719,15 @@ export default function AgentsPage() {
 		key: "answer_fetches" | "requests" | "visitors"
 	) => rows.reduce((sum, row) => sum + Number(row[key] ?? 0), 0);
 
-	const hasLoadError = !(
-		isPending ||
-		results.some(
-			(result) => result.queryId === "products" && "ai_products" in result.data
-		)
-	);
+	const hasLoadError =
+		isError ||
+		!(
+			isPending ||
+			results.some(
+				(result) =>
+					result.queryId === "products" && "ai_products" in result.data
+			)
+		);
 	const topSender = products.reduce<ProductRow | null>(
 		(top, row) => (row.visitors > (top?.visitors ?? 0) ? row : top),
 		null

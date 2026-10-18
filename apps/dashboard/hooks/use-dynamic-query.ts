@@ -108,13 +108,25 @@ function buildRequest(
 	};
 }
 
+export function fetchDynamicQuery(
+	idOrOptions: string | QueryTarget,
+	dateRange: DateRange,
+	queryData: DynamicQueryRequest,
+	signal?: AbortSignal
+): Promise<DynamicQueryResponse>;
+export function fetchDynamicQuery(
+	idOrOptions: string | QueryTarget,
+	dateRange: DateRange,
+	queryData: DynamicQueryRequest[],
+	signal?: AbortSignal
+): Promise<BatchQueryResponse>;
 export async function fetchDynamicQuery(
 	idOrOptions: string | QueryTarget,
 	dateRange: DateRange,
 	queryData: DynamicQueryRequest | DynamicQueryRequest[],
 	signal?: AbortSignal
 ): Promise<DynamicQueryResponse | BatchQueryResponse> {
-	const timezone = guessTimezone();
+	const timezone = dateRange.timezone || guessTimezone();
 	const target: QueryTarget =
 		typeof idOrOptions === "string" ? { websiteId: idOrOptions } : idOrOptions;
 
@@ -156,22 +168,10 @@ export function useDynamicQuery<
 	queryData: DynamicQueryRequest,
 	options?: Partial<UseQueryOptions<DynamicQueryResponse>>
 ) {
-	const fetchData = useCallback(
-		async ({ signal }: { signal?: AbortSignal }) => {
-			const result = await fetchDynamicQuery(
-				websiteId,
-				dateRange,
-				queryData,
-				signal
-			);
-			return result as DynamicQueryResponse;
-		},
-		[websiteId, dateRange, queryData]
-	);
-
 	const query = useQuery({
 		queryKey: ["dynamic-query", websiteId, dateRange, queryData],
-		queryFn: fetchData,
+		queryFn: ({ signal }) =>
+			fetchDynamicQuery(websiteId, dateRange, queryData, signal),
 		...defaultQueryOptions,
 		...options,
 		enabled:
@@ -180,22 +180,28 @@ export function useDynamicQuery<
 			queryData.parameters.length > 0,
 	});
 
-	const processedData = useMemo(() => {
-		const acc: Record<string, any> = {};
-		for (const result of query.data?.data ?? []) {
-			if (result.success) {
-				acc[result.parameter] = result.data;
-			}
-		}
-		return acc as TData;
-	}, [query.data]);
+	const processedData = useMemo(
+		() =>
+			Object.fromEntries(
+				(query.data?.data ?? [])
+					.filter((result) => result.success)
+					.map((result) => [result.parameter, result.data])
+			) as TData,
+		[query.data]
+	);
+	const failedResult = query.data?.data.find((result) => !result.success);
 
 	return {
 		data: processedData,
 		isLoading: query.isLoading,
 		isFetching: query.isFetching,
-		isError: query.isError,
-		error: query.error,
+		isPaused: query.isPaused,
+		isError: query.isError || Boolean(failedResult),
+		error:
+			query.error ??
+			(failedResult
+				? new Error(failedResult.error || "Failed to fetch analytics data")
+				: null),
 		refetch: query.refetch,
 	};
 }
@@ -208,19 +214,6 @@ export function useBatchDynamicQuery(
 ) {
 	const target: QueryTarget =
 		typeof idOrOptions === "string" ? { websiteId: idOrOptions } : idOrOptions;
-
-	const fetchData = useCallback(
-		async ({ signal }: { signal?: AbortSignal }) => {
-			const result = await fetchDynamicQuery(
-				target,
-				dateRange,
-				queries,
-				signal
-			);
-			return result as BatchQueryResponse;
-		},
-		[target, dateRange, queries]
-	);
 
 	const query = useQuery({
 		queryKey: [
@@ -235,7 +228,8 @@ export function useBatchDynamicQuery(
 			dateRange.timezone,
 			JSON.stringify(queries),
 		],
-		queryFn: fetchData,
+		queryFn: ({ signal }) =>
+			fetchDynamicQuery(target, dateRange, queries, signal),
 		...defaultQueryOptions,
 		...options,
 		enabled:
@@ -247,35 +241,35 @@ export function useBatchDynamicQuery(
 			queries.length > 0,
 	});
 
-	const processedResults = useMemo(() => {
-		if (!query.data?.results) {
-			return [];
-		}
-
-		return query.data.results.map((result) => {
-			const data: Record<string, any> = {};
-			let success = false;
-
-			if (result.data && Array.isArray(result.data)) {
-				for (const paramResult of result.data) {
-					if (paramResult.success && paramResult.data) {
-						data[paramResult.parameter] = paramResult.data;
-						success = true;
-					}
-				}
-			}
-
-			return { queryId: result.queryId, success, data };
-		});
-	}, [query.data]);
+	const processedResults = useMemo(
+		() =>
+			(query.data?.results ?? []).map((result) => {
+				const failure = result.data.find((parameter) => !parameter.success);
+				const data: Record<string, unknown[]> = Object.fromEntries(
+					result.data
+						.filter((parameter) => parameter.success)
+						.map((parameter) => [parameter.parameter, parameter.data])
+				);
+				return {
+					queryId: result.queryId,
+					success: result.data.some((parameter) => parameter.success),
+					data,
+					error:
+						result.error ||
+						(failure && (failure.error || "Failed to fetch analytics data")),
+				};
+			}),
+		[query.data]
+	);
+	const failure = processedResults.find((result) => result.error);
 
 	const getDataForQuery = useCallback(
-		(queryId: string, parameter: string) => {
+		<T extends object = Record<string, unknown>>(
+			queryId: string,
+			parameter: string
+		): T[] => {
 			const result = processedResults.find((r) => r.queryId === queryId);
-			if (!result?.success) {
-				return [];
-			}
-			return result.data[parameter] || [];
+			return (result?.data[parameter] as T[] | undefined) ?? [];
 		},
 		[processedResults]
 	);
@@ -283,8 +277,8 @@ export function useBatchDynamicQuery(
 	return {
 		results: processedResults,
 		isLoading: query.isLoading,
-		isError: query.isError,
-		error: query.error,
+		isError: query.isError || Boolean(failure),
+		error: query.error ?? (failure ? new Error(failure.error) : null),
 		refetch: query.refetch,
 		isFetching: query.isFetching,
 		isPending: query.isPending,

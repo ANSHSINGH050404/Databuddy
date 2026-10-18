@@ -13,8 +13,7 @@ import { SimpleMetricsChart } from "@/components/charts/simple-metrics-chart";
 import { DataTable, type TabConfig } from "@/components/table/data-table";
 import { useDateFilters } from "@/hooks/use-date-filters";
 import { useBatchDynamicQuery } from "@/hooks/use-dynamic-query";
-import { usePersistentState } from "@databuddy/ui";
-import { dayjs } from "@databuddy/ui";
+import { EmptyState, dayjs, usePersistentState } from "@databuddy/ui";
 import {
 	addDynamicFilterAtom,
 	dynamicQueryFiltersAtom,
@@ -150,7 +149,7 @@ export default function VitalsPage() {
 		},
 	];
 
-	const { isLoading, getDataForQuery } = useBatchDynamicQuery(
+	const { isLoading, isError, refetch, getDataForQuery } = useBatchDynamicQuery(
 		websiteId,
 		dateRange,
 		queries
@@ -475,6 +474,18 @@ export default function VitalsPage() {
 	const selectedPercentileLabel =
 		PERCENTILE_OPTIONS.find((opt) => opt.value === selectedPercentile)
 			?.description || selectedPercentile;
+	if (isError) {
+		return (
+			<EmptyState
+				action={{ label: "Try again", onClick: () => refetch() }}
+				className="p-8"
+				description="We couldn't load performance data. Try again in a moment."
+				icon={<HeartbeatIcon />}
+				title="Performance data unavailable"
+				variant="error"
+			/>
+		);
+	}
 
 	return (
 		<div className="relative flex h-full flex-col">
