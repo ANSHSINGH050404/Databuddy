@@ -82,13 +82,16 @@ describe("checkAutumnUsage", () => {
 			balance: { usage: 0, granted: 0, unlimited: false },
 		});
 		await checkAutumnUsage("cust_1", "events", { website_id: "ws_1" });
-		expect(mockCheck).toHaveBeenCalledWith({
-			customerId: "cust_1",
-			featureId: "events",
-			sendEvent: true,
-			requiredBalance: 1,
-			properties: { website_id: "ws_1" },
-		});
+		expect(mockCheck).toHaveBeenCalledWith(
+			{
+				customerId: "cust_1",
+				featureId: "events",
+				sendEvent: true,
+				requiredBalance: 1,
+				properties: { website_id: "ws_1" },
+			},
+			expect.anything()
+		);
 	});
 
 	test("logs balance context from Autumn response", async () => {

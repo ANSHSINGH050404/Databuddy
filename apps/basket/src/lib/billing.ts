@@ -13,6 +13,8 @@ interface BillingResult {
 	allowed: true;
 }
 
+const CHECK_TIMEOUT_MS = 1000;
+
 export function checkAutumnUsage(
 	customerId: string,
 	featureId: string,
@@ -28,13 +30,16 @@ export function checkAutumnUsage(
 		try {
 			const response = await record("autumn.check", () =>
 				autumnCall("check", () =>
-					getAutumn().check({
-						customerId,
-						featureId,
-						sendEvent: true,
-						requiredBalance: quantity,
-						properties,
-					})
+					getAutumn().check(
+						{
+							customerId,
+							featureId,
+							sendEvent: true,
+							requiredBalance: quantity,
+							properties,
+						},
+						{ timeoutMs: CHECK_TIMEOUT_MS }
+					)
 				)
 			);
 
