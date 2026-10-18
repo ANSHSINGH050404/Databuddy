@@ -163,7 +163,10 @@ export function TwoFactorDialog({
 		},
 		onSuccess: () => {
 			trackAppEvent(APP_EVENTS.twoFactorEnabled);
-			toast.success("Two-factor authentication enabled");
+			toast.success("Two-factor authentication enabled", {
+				description:
+					"Your other devices were signed out and will ask for a code when you sign in again.",
+			});
 			setStep("backup");
 			onSuccess();
 		},
@@ -404,7 +407,12 @@ export function TwoFactorDialog({
 						</Dialog.Header>
 
 						<Dialog.Body>
-							<OtpInput autoFocus onChange={setVerifyCode} value={verifyCode} />
+							<OtpInput
+								aria-label="Authentication code"
+								autoFocus
+								onChange={setVerifyCode}
+								value={verifyCode}
+							/>
 						</Dialog.Body>
 
 						<Dialog.Footer>
@@ -448,7 +456,7 @@ export function TwoFactorDialog({
 								<WarningCircleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
 								<Text tone="muted" variant="caption">
 									If you lose access to your authenticator, these codes are the
-									only way to recover your account.
+									only way to sign in without contacting support.
 								</Text>
 							</div>
 						</Dialog.Body>

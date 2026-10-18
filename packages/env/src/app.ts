@@ -92,7 +92,7 @@ export interface Config {
 const REQUIRED_IN_PRODUCTION = ["BETTER_AUTH_SECRET"] as const;
 const REQUIRED_IN_HOSTED_CLOUD = ["AUTUMN_SECRET_KEY"] as const;
 
-function isHostedCloud(env: Env): boolean {
+export function isHostedCloud(env: Env = process.env): boolean {
 	return env.NODE_ENV === "production" && !readBooleanEnv("SELFHOST", env);
 }
 
@@ -164,6 +164,7 @@ function readServices(env: Env) {
 		databuddyApiKey: readOptional(env, "DATABUDDY_API_KEY"),
 		dubApiKey: readOptional(env, "DUB_API_KEY"),
 		resendApiKey: readOptional(env, "RESEND_API_KEY"),
+		resendUsersSegmentId: readOptional(env, "RESEND_USERS_SEGMENT_ID"),
 		slackWebhookUrl: readOptional(env, "SLACK_WEBHOOK_URL"),
 		superlogApiKey: readOptional(env, "SUPERLOG_API_KEY"),
 		supermemoryApiKey: readOptional(env, "SUPERMEMORY_API_KEY"),

@@ -4,22 +4,16 @@ import {
 	defineRequestState,
 	runWithTransaction,
 } from "@better-auth/core/context";
-import {
-	and,
-	db,
-	eq,
-	inArray,
-	like,
-	TransactionRollbackError,
-} from "@databuddy/db";
+import { db, eq, inArray, TransactionRollbackError } from "@databuddy/db";
 // biome-ignore lint/performance/noNamespaceImport: Better Auth's Drizzle adapter expects a schema object map.
 import * as schema from "@databuddy/db/schema";
 import {
 	member as memberTable,
 	organization as organizationTable,
+	session as sessionTable,
 	user as userTable,
-	verification as verificationTable,
 } from "@databuddy/db/schema";
+import type { InternalAdapter } from "@better-auth/core";
 import {
 	AUTH_EMAIL_EXPIRY_SECONDS,
 	DeleteAccountEmail,
@@ -28,6 +22,9 @@ import {
 	OtpEmail,
 	render,
 	ResetPasswordEmail,
+	type SecurityChange,
+	SecurityChangeEmail,
+	securityChangeSubject,
 	VerificationEmail,
 } from "@databuddy/email";
 import { billingMode, config, readBooleanEnv } from "@databuddy/env/app";
@@ -78,6 +75,7 @@ import { maskEmail } from "evlog/better-auth";
 import { Resend } from "resend";
 import { ac, admin, member, owner, viewer } from "./permissions";
 import { getAuthAuditContext, runWithAuthAuditContext } from "./audit-context";
+import { dropUserFromMailingList, syncUserToMailingList } from "./mailing-list";
 
 function generateOrgSlug(name: string): string {
 	const base = name
@@ -226,7 +224,7 @@ async function enforceAuthEmailRateLimit(input: {
 	});
 }
 
-async function sendAuthEmail(input: {
+export async function sendAuthEmail(input: {
 	subject: string;
 	template: EmailTemplate;
 	to: string;
@@ -365,16 +363,37 @@ function notifySignUpSlackAction(input: {
 	});
 }
 
+// Reset links live in secondary storage keyed only by token, so the tokens a
+// user was sent are indexed here; the emailed reset code is keyed by address.
+const passwordResetIndexKey = (userId: string) => `password-reset:${userId}`;
+
+async function indexResetToken(userId: string, token: string): Promise<void> {
+	const key = passwordResetIndexKey(userId);
+	await getRedisCache()
+		.multi()
+		.sadd(key, `reset-password:${token}`)
+		.expire(key, AUTH_EMAIL_EXPIRY_SECONDS.passwordReset)
+		.exec();
+}
+
 async function purgeOutstandingResetTokens(userId: string): Promise<void> {
 	try {
-		await db
-			.delete(verificationTable)
-			.where(
-				and(
-					like(verificationTable.identifier, "reset-password:%"),
-					eq(verificationTable.value, userId)
-				)
-			);
+		const { internalAdapter } = await auth.$context;
+		const redis = getRedisCache();
+		const identifiers = await redis.smembers(passwordResetIndexKey(userId));
+		const owner = await db.query.user.findFirst({
+			where: { id: userId },
+			columns: { email: true },
+		});
+		if (owner) {
+			identifiers.push(`forget-password-otp-${owner.email}`);
+		}
+		await Promise.all(
+			identifiers.map((identifier) =>
+				internalAdapter.deleteVerificationByIdentifier(identifier)
+			)
+		);
+		await redis.del(passwordResetIndexKey(userId));
 	} catch (error) {
 		log.error({
 			service: "auth",
@@ -780,6 +799,194 @@ const recordAuthOutcome = createAuthMiddleware(async (ctx) => {
 	}
 });
 
+export const TWO_FACTOR_PAGE_PATH = "/login/two-factor";
+
+// twoFactor only challenges password sign-ins. These endpoints also create a
+// session, so without this a magic link, email code or linked social account
+// would skip the second factor entirely.
+const PASSWORDLESS_SIGN_IN_PATHS = new Set([
+	"/callback/:id",
+	"/email-otp/verify-email",
+	"/magic-link/verify",
+	"/sign-in/email-otp",
+	"/sign-in/social",
+	"/verify-email",
+]);
+
+const twoFactorPlugin = twoFactor({ issuer: "Databuddy" });
+const [challengeSecondFactor] = twoFactorPlugin.hooks.after;
+if (!challengeSecondFactor) {
+	throw new Error("better-auth twoFactor no longer exposes its sign-in hook");
+}
+
+const redirectToSecondFactor = createAuthMiddleware((ctx) => {
+	const destination = ctx.context.responseHeaders?.get("location");
+	if (!(destination && isTwoFactorChallenge(ctx.context.returned))) {
+		return Promise.resolve();
+	}
+	const target = new URL(TWO_FACTOR_PAGE_PATH, config.urls.dashboard);
+	const callback = new URL(destination, target);
+	if (callback.origin === target.origin) {
+		target.searchParams.set(
+			"callback",
+			`${callback.pathname}${callback.search}`
+		);
+	}
+	return Promise.reject(ctx.redirect(target.toString()));
+});
+
+const isPasswordlessSignIn = (ctx: { path?: string }) =>
+	PASSWORDLESS_SIGN_IN_PATHS.has(ctx.path ?? "");
+
+// Listed after twoFactor and multiSession, and before the OAuth provider resumes
+// an authorization from the new session cookie.
+const passwordlessSecondFactor = {
+	id: "passwordless-second-factor",
+	hooks: {
+		after: [
+			{ matcher: isPasswordlessSignIn, handler: challengeSecondFactor.handler },
+			{ matcher: isPasswordlessSignIn, handler: redirectToSecondFactor },
+		],
+	},
+} satisfies BetterAuthPlugin;
+
+function securityChangeFor(
+	path: string | undefined,
+	before: Record<string, unknown> | undefined,
+	after: Record<string, unknown> | undefined
+): SecurityChange | null {
+	if (path === "/two-factor/disable" && before?.twoFactorEnabled === true) {
+		return "two_factor_disabled";
+	}
+	if (path === "/two-factor/generate-backup-codes") {
+		return "backup_codes_regenerated";
+	}
+	if (
+		path === "/two-factor/verify-totp" &&
+		before &&
+		before.twoFactorEnabled !== true &&
+		after?.twoFactorEnabled === true
+	) {
+		return "two_factor_enabled";
+	}
+	return null;
+}
+
+// Postgres holds every session; the Redis active-session list can miss some.
+export async function signOutEverywhere(
+	internalAdapter: InternalAdapter,
+	userId: string,
+	keepToken?: string
+): Promise<void> {
+	const sessions = await db
+		.select({ token: sessionTable.token })
+		.from(sessionTable)
+		.where(eq(sessionTable.userId, userId));
+	await internalAdapter.deleteSessions(
+		sessions.map(({ token }) => token).filter((token) => token !== keepToken)
+	);
+}
+
+// twoFactor keeps trusted devices as verification values that cannot be listed
+// by user, and only forgets the current browser when 2FA is turned off. A
+// per-user revocation time makes every browser trusted before it ask again.
+const TRUSTED_DEVICE_COOKIE = "trust_device";
+const TRUST_REVOCATION_TTL_SECONDS = 31 * 24 * 60 * 60;
+const trustRevokedAtKey = (userId: string) =>
+	`two-factor-trust-revoked-at:${userId}`;
+
+export async function revokeTrustedDevices(userId: string): Promise<void> {
+	await getRedisCache().set(
+		trustRevokedAtKey(userId),
+		Date.now().toString(),
+		"EX",
+		TRUST_REVOCATION_TTL_SECONDS
+	);
+}
+
+const forgetRevokedTrust = createAuthMiddleware(async (ctx) => {
+	const cookie = ctx.context.createAuthCookie(TRUSTED_DEVICE_COOKIE);
+	const trusted = await ctx.getSignedCookie(cookie.name, ctx.context.secret);
+	const identifier = trusted ? trusted.split("!")[1] : undefined;
+	if (!identifier) {
+		return;
+	}
+	const { internalAdapter } = ctx.context;
+	const record = await internalAdapter.findVerificationValue(identifier);
+	if (!record) {
+		return;
+	}
+	const revokedAt = Number(
+		await getRedisCache().get(trustRevokedAtKey(record.value))
+	);
+	if (revokedAt >= new Date(record.createdAt).getTime()) {
+		await internalAdapter.deleteVerificationByIdentifier(identifier);
+	}
+});
+
+const handleSecurityChange = createAuthMiddleware(async (ctx) => {
+	const { newSession, returned, session } = ctx.context;
+	if (returned instanceof APIError) {
+		return;
+	}
+	const change = securityChangeFor(ctx.path, session?.user, newSession?.user);
+	const email = (newSession ?? session)?.user.email;
+	if (!(change && email)) {
+		return;
+	}
+	const userId = (newSession ?? session)?.user.id;
+	if (userId && change !== "backup_codes_regenerated") {
+		await revokeTrustedDevices(userId);
+	}
+	if (change === "two_factor_enabled" && newSession) {
+		await signOutEverywhere(
+			ctx.context.internalAdapter,
+			newSession.user.id,
+			newSession.session.token
+		);
+	}
+	await sendAuthEmail({
+		to: email,
+		subject: securityChangeSubject(change),
+		template: SecurityChangeEmail({
+			change,
+			settingsUrl: `${config.urls.dashboard}/settings/account`,
+		}),
+	}).catch((error: unknown) => {
+		log.error({
+			service: "auth",
+			security_notification_failed: change,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	});
+});
+
+const PASSWORD_SIGN_IN_PATHS = new Set([
+	"/sign-in/email",
+	"/sign-in/phone-number",
+	"/sign-in/username",
+]);
+
+const securityChanges = {
+	id: "security-changes",
+	hooks: {
+		before: [
+			{
+				matcher: (ctx) =>
+					PASSWORD_SIGN_IN_PATHS.has(ctx.path ?? "") ||
+					isPasswordlessSignIn(ctx),
+				handler: forgetRevokedTrust,
+			},
+		],
+		after: [
+			{
+				matcher: (ctx) => ctx.path?.startsWith("/two-factor/") ?? false,
+				handler: handleSecurityChange,
+			},
+		],
+	},
+} satisfies BetterAuthPlugin;
+
 // A plugin after hook, listed after twoFactor, so the audit sees a password-only
 // sign-in after twoFactor has replaced its session with a second-factor challenge.
 const authAudit = {
@@ -862,6 +1069,7 @@ export const baseAuthOptions = {
 		user: {
 			create: {
 				after: async (createdUser) => {
+					syncUserToMailingList(createdUser);
 					let orgId: string;
 					try {
 						orgId = await provisionDefaultOrg({
@@ -886,6 +1094,14 @@ export const baseAuthOptions = {
 						organizationId: orgId,
 					});
 					trackDubSignUp(createdUser);
+				},
+			},
+			update: {
+				after: (updatedUser) => {
+					if (updatedUser) {
+						syncUserToMailingList(updatedUser);
+					}
+					return Promise.resolve();
 				},
 			},
 		},
@@ -1005,6 +1221,7 @@ export const baseAuthOptions = {
 					}
 				),
 			afterDelete: (deletedUser, request) => {
+				dropUserFromMailingList(deletedUser.email);
 				const requestContext = request ? toAuditRequest(request) : undefined;
 				const logger = createLogger({
 					service: "auth",
@@ -1085,7 +1302,8 @@ export const baseAuthOptions = {
 		onPasswordReset: async ({ user }: { user: { id: string } }) => {
 			await purgeOutstandingResetTokens(user.id);
 		},
-		sendResetPassword: async ({ user, url }) => {
+		sendResetPassword: async ({ user, url, token }) => {
+			await indexResetToken(user.id, token);
 			await enforceAuthEmailRateLimit({
 				callback: "reset_password",
 				email: user.email,
@@ -1182,7 +1400,9 @@ export const baseAuthOptions = {
 				});
 			},
 		}),
-		twoFactor(),
+		twoFactorPlugin,
+		passwordlessSecondFactor,
+		securityChanges,
 		organization({
 			creatorRole: "owner",
 			invitationExpiresIn: AUTH_EMAIL_EXPIRY_SECONDS.invitation,

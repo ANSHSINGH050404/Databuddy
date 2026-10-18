@@ -117,7 +117,7 @@ function LoginPage() {
 
 		setIsLoading(true);
 
-		await authClient.signIn.email({
+		const { data } = await authClient.signIn.email({
 			email,
 			password,
 			callbackURL: safeCallback,
@@ -144,6 +144,10 @@ function LoginPage() {
 			},
 		});
 
+		if (data && "twoFactorRedirect" in data && data.twoFactorRedirect) {
+			router.push(`/login/two-factor${callbackQuery}`);
+			return;
+		}
 		setIsLoading(false);
 	};
 

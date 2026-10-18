@@ -15,8 +15,10 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
+    "mailing-list:sync": "bun src/scripts/sync-mailing-list.ts",
+    "two-factor:recover": "bun src/scripts/two-factor-recovery.ts",
     "test": "bun test src",
-    "test:integration": "BUSINESS_CONTEXT_INTEGRATION_TESTS=true MCP_OAUTH_INTEGRATION_TESTS=true ORGANIZATION_INTEGRATION_TESTS=true REQUIRE_EMAIL_VERIFICATION=false bun test --isolate src/organization-metadata.integration.test.ts src/organization-membership-cache.integration.test.ts src/mcp-oauth.integration.test.ts"
+    "test:integration": "BUSINESS_CONTEXT_INTEGRATION_TESTS=true MCP_OAUTH_INTEGRATION_TESTS=true ORGANIZATION_INTEGRATION_TESTS=true PASSWORD_RESET_INTEGRATION_TESTS=true TWO_FACTOR_INTEGRATION_TESTS=true REQUIRE_EMAIL_VERIFICATION=false bun test --isolate src/organization-metadata.integration.test.ts src/organization-membership-cache.integration.test.ts src/mcp-oauth.integration.test.ts src/password-reset.integration.test.ts src/two-factor.integration.test.ts"
   },
   "dependencies": {
     "@better-auth/cimd": "1.7.7",

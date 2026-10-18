@@ -76,6 +76,28 @@ This path uses the trusted `cf-connecting-ip` header. It does not fall back to a
 
 Test restrictions with the actual clients and infrastructure that will send events. Blocking legitimate sources prevents their data from being collected.
 
+## Account security
+
+### Two-factor authentication
+
+Open **Settings → Account** in the dashboard and choose **Enable** next to two-factor authentication to protect your login with an authenticator app such as 1Password, Authy, or Google Authenticator. Accounts created with Google or GitHub set a password first, because turning two-factor authentication on or off asks for it.
+
+Once it is on, every way of signing in asks for a code after the first step, whether you use your email and password, a magic link, or Google or GitHub. Turning it on also signs your account out on every other device within a few minutes, so a session you did not start cannot outlive the change. You can check **Trust this device** on the code screen to skip the code on that browser for 30 days.
+
+Setup gives you single-use backup codes. Store them somewhere other than the device that runs your authenticator app, and use one on the code screen if you lose that device. You can create a fresh set from **Settings → Account** at any time, which makes the previous codes stop working.
+
+Repeated wrong codes lock two-factor sign-in for 15 minutes. We email the account owner whenever two-factor authentication is turned on or off and whenever new backup codes are created, so an unexpected email is a reason to reset your password. Self-hosted instances send these emails only when email delivery is configured with `RESEND_API_KEY` and `EMAIL_FROM`.
+
+### Losing your authenticator and backup codes
+
+If you are still signed in on any device, you do not need support: open **Settings → Account** there and turn two-factor authentication off with your password.
+
+If you are signed out everywhere and can no longer produce a code, email [support@databuddy.cc](mailto:support@databuddy.cc) from the address on your account and tell us which of your websites you can publish a DNS record on. Because anyone who reads that inbox could send the same request, recovery also needs proof that you control that website's domain. It must belong to an organization you own, and you must have set its domain yourself at least 30 days ago. We send you a DNS TXT record named `_databuddy-recovery.<your-domain>`, and you publish it directly on that name rather than through a CNAME.
+
+We also email you as soon as the request is opened, and the reset only happens after a two-day waiting period. Signing in to your account during that time cancels the request, so if you did not ask for it, sign in and change your password. After the waiting period, we turn two-factor authentication off, sign your account out on every device, remove trusted browsers and connected app tokens, and email you again. You can then sign in, set it up again, and delete the TXT record. If you do not own any websites yet, two people on our team review other proof of ownership before anything changes.
+
+Self-hosted instances use the same process through `bun run --cwd packages/auth two-factor:recover`, which records each step in the audit log of the organizations the account owns.
+
 ## Data protection
 
 Requests are validated, size-limited, and rate-limited. Profile display names and email addresses use AES-256-GCM field encryption when the server key is configured; production ingestion requires that key. Arbitrary event properties and profile traits are outside this field-encryption mechanism.

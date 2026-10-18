@@ -59,6 +59,7 @@ export const auditActions = {
 	AUDIT_LOG_EVENT_VIEWED: defineAction("audit_log.event_viewed", "audit_log"),
 	AUDIT_LOG_EXPORTED: defineAction("audit_log.exported", "audit_log"),
 	RPC_MUTATION: defineAction("rpc.mutation", "organization"),
+	RECOMMENDATION_SAVED: defineAction("recommendation.saved", "recommendation"),
 	FLAG_CHANGED: defineAction("flag.changed", "flag"),
 	API_KEY_CREATED: defineAction("api_key.created", "api_key"),
 	API_KEY_UPDATED: defineAction("api_key.updated", "api_key"),
@@ -113,6 +114,11 @@ export const auditActions = {
 		"organization.invitation_cancelled",
 		"invitation"
 	),
+	TWO_FACTOR_RECOVERY_REQUESTED: defineAction(
+		"account.two_factor_recovery_requested",
+		"account"
+	),
+	TWO_FACTOR_RECOVERED: defineAction("account.two_factor_recovered", "account"),
 } as const;
 
 export type AuditActionDefinition =
@@ -120,6 +126,9 @@ export type AuditActionDefinition =
 export type AuditActionName = AuditActionDefinition["action"];
 
 export const auditActionLabels = {
+	"account.two_factor_recovered": "Recovered two-factor authentication",
+	"account.two_factor_recovery_requested":
+		"Requested two-factor authentication recovery",
 	"business_context.updated": "Updated business context",
 	"business_context.restored": "Restored business context",
 	"api_key.created": "Created API key",
@@ -142,6 +151,7 @@ export const auditActionLabels = {
 	"organization.member_role_updated": "Updated member role",
 	"organization.updated": "Updated organization",
 	"rpc.mutation": "System mutation",
+	"recommendation.saved": "Saved recommendation",
 	"website.created": "Created website",
 	"website.deleted": "Deleted website",
 	"website.settings_updated": "Updated website settings",
@@ -226,6 +236,7 @@ const auditTargetLabels: Record<string, string> = {
 	invitation: "Invitation",
 	member: "Member",
 	organization: "Organization",
+	recommendation: "Recommendation",
 	website: "Website",
 };
 
