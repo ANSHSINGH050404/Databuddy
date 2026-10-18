@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import ts from "typescript";
 
@@ -930,12 +930,14 @@ function readPolicyText(path: string) {
 function main() {
 	const changedLines = getChangedLines();
 	const violations = [
-		...[...changedLines.keys()].flatMap((path) => {
-			const text = readPolicyText(path);
-			return findPolicyViolations(path, text).filter((violation) =>
-				intersectsChangedLines(violation, changedLines)
-			);
-		}),
+		...[...changedLines.keys()]
+			.filter((path) => STAGED || !statSync(resolve(path)).isDirectory())
+			.flatMap((path) => {
+				const text = readPolicyText(path);
+				return findPolicyViolations(path, text).filter((violation) =>
+					intersectsChangedLines(violation, changedLines)
+				);
+			}),
 		...findTestWiringViolations(collectTestWiringPackages()),
 	];
 
