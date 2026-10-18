@@ -8,7 +8,18 @@ import {
 	SELF_HOSTED_INVESTIGATIONS_MESSAGE,
 } from "@databuddy/shared/billing";
 import { appliedInsightActionReply } from "@databuddy/shared/insights";
-import { and, db, desc, eq, inArray, isNull, or, sql } from "@databuddy/db";
+import {
+	and,
+	db,
+	desc,
+	eq,
+	inArray,
+	isNull,
+	ne,
+	notExists,
+	or,
+	sql,
+} from "@databuddy/db";
 import {
 	analyticsInsights,
 	funnelDefinitions,
@@ -1540,11 +1551,25 @@ export const insightsRouter = {
 		)
 		.handler(async ({ context, input }) => {
 			await authorizeInsightsRead(context, input);
+			const hasNoActiveReply = notExists(
+				db
+					.select({ id: insightReplies.id })
+					.from(insightReplies)
+					.where(
+						and(
+							eq(insightReplies.insightId, analyticsInsights.id),
+							inArray(insightReplies.status, ["queued", "running"]),
+							ne(insightReplies.intent, "clarification")
+						)
+					)
+			);
+
 			const whereClause = and(
 				eq(analyticsInsights.organizationId, input.organizationId),
 				input.websiteId
 					? eq(analyticsInsights.websiteId, input.websiteId)
 					: undefined,
+				hasNoActiveReply,
 				isNull(websites.deletedAt)
 			);
 
