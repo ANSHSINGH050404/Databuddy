@@ -55,6 +55,7 @@
     "workspace": "NODE_ENV=development bun --no-env-file packages/test/src/setup.ts",
     "email:dev": "dotenv -- sh -c 'cd packages/email && bun run dev'",
     "email:segments": "dotenv -- sh -c 'cd packages/db && bun run email:segments \"$@\"' --",
+    "mailing-list:sync": "dotenv -- sh -c 'cd packages/auth && bun run mailing-list:sync \"$@\"' --",
     "sdk:build": "turbo run build --filter @databuddy/sdk",
     "dev:dashboard": "dotenv -- turbo run dev --env-mode=loose --filter @databuddy/dashboard --filter @databuddy/api --filter '@databuddy/insights*'",
     "dev:insights": "dotenv -- turbo run dev --env-mode=loose --filter @databuddy/insights",

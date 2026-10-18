@@ -46,7 +46,7 @@
   "scripts": {
     "check-types": "tsc --noEmit",
     "test": "bun test --isolate",
-    "test:integration": "BUSINESS_CONTEXT_INTEGRATION_TESTS=true MCP_OAUTH_INTEGRATION_TESTS=true REQUIRE_EMAIL_VERIFICATION=false CLICKHOUSE_INTEGRATION_TESTS=true STRIPE_REVENUE_E2E=true bun test --isolate src/lib/business-context.test.ts src/ai/mcp/oauth-website-access.integration.test.ts src/query/builders/stripe-revenue.e2e.integration.test.ts"
+    "test:integration": "BUSINESS_CONTEXT_INTEGRATION_TESTS=true MCP_OAUTH_INTEGRATION_TESTS=true REQUIRE_EMAIL_VERIFICATION=false CLICKHOUSE_INTEGRATION_TESTS=true STRIPE_REVENUE_E2E=true bun test --isolate src/lib/business-context.test.ts src/ai/mcp/oauth-website-access.integration.test.ts src/query/builders/stripe-revenue.e2e.integration.test.ts src/query/builder-execution.test.ts"
   },
   "dependencies": {
     "@ai-sdk/provider": "^3.0.5",
@@ -72,6 +72,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@databuddy/test": "workspace:*",
     "@types/bun": "catalog:",
     "@types/node": "^26.0.0",
     "typescript": "catalog:",

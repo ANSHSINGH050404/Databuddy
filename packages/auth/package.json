@@ -19,11 +19,11 @@
     "test:integration": "BUSINESS_CONTEXT_INTEGRATION_TESTS=true MCP_OAUTH_INTEGRATION_TESTS=true ORGANIZATION_INTEGRATION_TESTS=true REQUIRE_EMAIL_VERIFICATION=false bun test --isolate src/organization-metadata.integration.test.ts src/organization-membership-cache.integration.test.ts src/mcp-oauth.integration.test.ts"
   },
   "dependencies": {
-    "@better-auth/cimd": "1.7.5",
-    "@better-auth/core": "1.7.5",
-    "@better-auth/mcp": "1.7.5",
-    "@better-auth/oauth-provider": "1.7.5",
-    "@better-auth/redis-storage": "1.7.5",
+    "@better-auth/cimd": "1.7.7",
+    "@better-auth/core": "1.7.7",
+    "@better-auth/mcp": "1.7.7",
+    "@better-auth/oauth-provider": "1.7.7",
+    "@better-auth/redis-storage": "1.7.7",
     "@databuddy/db": "*",
     "@databuddy/email": "*",
     "@databuddy/env": "workspace:*",
@@ -32,9 +32,9 @@
     "@databuddy/services": "workspace:*",
     "@databuddy/shared": "workspace:*",
     "autumn-js": "catalog:",
-    "better-auth": "1.7.5",
+    "better-auth": "1.7.7",
     "drizzle-kit": "^1.0.0-rc.1",
     "evlog": "catalog:",
-    "resend": "^4.8.0"
+    "resend": "^6.12.3"
   }
 }
