@@ -9,10 +9,10 @@ Use this file when the task spans multiple packages or when the right edit locat
 - Theme tokens and WCAG-oriented contrast: `apps/dashboard/app/globals.css` (`:root`, `.dark`)
 - Next.js dashboard application
 - Default dev port: `3000`
-- For local app review, use `bun run dev:dashboard` with the same existing root `.env` across services; do not blank billing or AI credentials and present the resulting environment as a working app.
+- For local app review, use `bun run dev:dashboard` (dashboard + API + Insights) with the same existing root `.env` across services; do not blank billing or AI credentials and present the resulting environment as a working app.
 - Include interaction feedback in billing/pricing work: short transform/opacity reveals, native pending buttons with accessible labels, and reduced-motion support. Keep disabled billing details unmounted and verify motion in the local browser.
 - Talks to the backend through oRPC using [`apps/dashboard/lib/orpc.ts`](/Users/iza/Dev/Databuddy/apps/dashboard/lib/orpc.ts)
-- **Status pages:** Public page lives under `app/status/[slug]`; **dashboard** edit surface is `app/(main)/monitors/status-pages/[id]/page.tsx`. For stable chrome (no tab strip pop-in), keep `Tabs` always mounted and gate **content** with `useFeatureAccess` + `FeatureLockedPanel`—do not wrap the whole `Tabs` in `FeatureAccessGate` with a list-only `loadingFallback`. Reserve `PageHeader` `right` with skeletons until `statusPage` loads; use a static `description` and breadcrumb fallback `"Status page"` so the header does not reflow on fetch.
+- **Status pages:** Public page lives in `apps/status/app/[slug]/page.tsx`; **dashboard** edit surface is `apps/dashboard/app/(main)/monitors/status-pages/[id]/page.tsx`. For stable chrome (no tab strip pop-in), keep `Tabs` always mounted and gate **content** with `useFeatureAccess` + `FeatureLockedPanel`—do not wrap the whole `Tabs` in `FeatureAccessGate` with a list-only `loadingFallback`. Reserve `PageHeader` `right` with skeletons until `statusPage` loads; use a static `description` and breadcrumb fallback `"Status page"` so the header does not reflow on fetch.
 - Typical work:
   - UI components and pages
   - client hooks
@@ -20,7 +20,9 @@ Use this file when the task spans multiple packages or when the right edit locat
   - query and mutation consumers
 - **List** (`components/ui/composables/list.tsx`) and **Chart** (`components/ui/composables/chart.tsx`): compound shells for list pages and charts; see `design-system.mdc` for patterns. **Shared Recharts styling:** `lib/chart-presentation.ts` (also `Chart.presentation`)—surfaces (`chartSurfaceClassName`, `chartPlotRegionClassName`), axis ticks + Y widths, grid, tooltip shells, series palette, Recharts `Legend` wrappers + label helpers, `Chart.Legend` pill classes—use for bespoke charts so they match `Chart.Tooltip` / `CartesianArea`. **Layers:** (1) `Chart.SingleSeries` / `Chart.MultiSeries` / `Chart.CartesianArea` for common shapes—**prefer these**; (2) `Chart.Recharts.*` only for bespoke charts (reference bands, drag ranges, pie, stacked billing, traffic annotations). The **`recharts` npm package is imported only in `composables/chart.tsx`**. Exported **`ChartConfig`** is for AI `buildChartConfig`. `components/charts/simple-metrics-chart.tsx` is `Chart` + `Content` + `MultiSeries`. Dynamic chunks: `import("@/components/ui/composables/chart").then((m) => m.Chart.Recharts.…)` or composed `Chart.*` components.
 - Agent chat: [`contexts/chat-context.tsx`](/Users/iza/Dev/Databuddy/apps/dashboard/contexts/chat-context.tsx) — `useChat` must start with `messages: []` on server **and** first client paint; restore `getMessagesFromLocal` in `useLayoutEffect` and gate `saveMessagesToLocal` until `hasRestoredFromLocal`, or SSR/hydration will disagree (empty vs persisted thread). UI: [`agent-messages.tsx`](/Users/iza/Dev/Databuddy/apps/dashboard/app/(main)/websites/[id]/agent/_components/agent-messages.tsx) merges consecutive identical tool labels (`formatToolLabel`) when the same tool+input repeats (`· 2×`); bottom `StreamingIndicator` only when no assistant text **and** no active tool label (`displayMessage`), so the in-message `ToolStep` is not duplicated by the shimmer.
-- Analytics agent web search: [`web-search.ts`](/Users/iza/Dev/Databuddy/apps/api/src/ai/tools/web-search.ts) (Perplexity). Tool labels in dashboard [`tool-display.tsx`](/Users/iza/Dev/Databuddy/apps/dashboard/lib/tool-display.tsx).
+- Analytics agent website discovery: `search_website` and `scrape_page` in [`scrape-page.ts`](/Users/iza/Dev/Databuddy/packages/ai/src/ai/tools/scrape-page.ts); website-scoped search uses Context.dev, then scraping reads the selected page. Tool labels in dashboard [`tool-display.tsx`](/Users/iza/Dev/Databuddy/apps/dashboard/lib/tool-display.tsx).
+- Chart-to-agent scope starts in `components/agent/new-chat-button.tsx`: `AskAgentButton` puts selected dates and filters into the draft via `describeChartScope`; inspect this caller as well as the chat transport before reporting missing context.
+- Measurement setup already shows recent event-catalog presence in `app/(main)/organizations/components/measurement-plan-editor.tsx`; distinguish that feedback from emitter verification and windowed profile/sample readiness.
 
 ### `apps/api`
 
@@ -50,6 +52,7 @@ Use this file when the task spans multiple packages or when the right edit locat
 
 - Elysia redirect/link handling service
 - Likely owns link redirects and expired-link behavior
+- Referral funnel attribution spans redirect, tracker normalization and `packages/rpc/src/lib/analytics-utils.ts`: the current query searches `events.url` for `ref=<linkId>`, while the tracker strips query strings and does not retain `ref`. A redirect marker alone does not establish attribution.
 
 ### `apps/docs`
 
@@ -77,7 +80,7 @@ Use this file when the task spans multiple packages or when the right edit locat
   - ClickHouse client and schema
 - Key files:
   - [`packages/db/src/drizzle/schema/index.ts`](/Users/iza/Dev/Databuddy/packages/db/src/drizzle/schema/index.ts)
-  - [`packages/db/src/drizzle/relations.ts`](/Users/iza/Dev/Databuddy/packages/db/src/drizzle/relations.ts)
+  - [`packages/db/src/drizzle/schema/relations.ts`](/Users/iza/Dev/Databuddy/packages/db/src/drizzle/schema/relations.ts)
   - [`packages/db/src/client.ts`](/Users/iza/Dev/Databuddy/packages/db/src/client.ts) — strips `sslrootcert=system` from `DATABASE_URL` before `pg` Pool: libpq uses it for the OS trust store, but node-postgres treats `sslrootcert` as a file path and throws `ENOENT` on path `"system"`.
   - [`packages/db/src/clickhouse/client.ts`](/Users/iza/Dev/Databuddy/packages/db/src/clickhouse/client.ts)
 
@@ -96,9 +99,8 @@ Use this file when the task spans multiple packages or when the right edit locat
 
 ### `packages/env`
 
-- Central env validation
-- Per-app modules such as `dashboard.ts`, `api.ts`, `basket.ts`, and `docs.ts`
-- Update the matching module when adding or changing environment variables
+- Shared app configuration and validation in `src/app.ts`; public config in `public.ts`; boolean helpers in `boolean.ts`
+- Follow the consuming code's existing config owner when adding runtime settings
 
 ### `packages/shared`
 
@@ -109,6 +111,7 @@ Use this file when the task spans multiple packages or when the right edit locat
 
 - Published Databuddy SDK
 - Supports React, Vue, and Node entrypoints
+- Agent request instrumentation: `packages/sdk/src/agents`; MCP instrumentation: `packages/sdk/src/mcp`
 - Good starting point for external-facing analytics API changes
 - Flags architecture:
   - `BaseFlagsManager` (abstract) → `BrowserFlagsManager` (client) / `ServerFlagsManager` (node)
@@ -127,10 +130,9 @@ Use this file when the task spans multiple packages or when the right edit locat
 
 ### Other packages
 
-- `packages/ai`: LLM observability SDK wrappers for OpenAI, Anthropic, and Vercel AI SDK
+- `packages/ai`: shared agent, MCP tools, and analytics query builders (`packages/ai/src/query`; no standalone `packages/query`)
 - `packages/notifications`: multi-channel notifications and uptime templates
-- `packages/cache`: Drizzle cache implementation
-- `packages/redis`: Redis helpers and cache/pub-sub utilities
+- `packages/redis`: Redis clients, `cacheable()` caching, pub/sub, and BullMQ queues
 - `packages/services`: domain service helpers such as websites
 - `packages/validation`: shared Zod validation
 - `packages/api-keys`: API key resolution and scopes
@@ -161,9 +163,9 @@ Use this file when the task spans multiple packages or when the right edit locat
 
 ### New environment variable
 
-1. Add it to the relevant `packages/env/src/*.ts` module
-2. Update the consuming app or package
-3. Prefer existing env-loading patterns instead of reading raw `process.env` in many places
+1. Find the existing runtime config in the consuming service
+2. Extend shared config in `packages/env/src/app.ts` or service-local config according to that owner; use `public.ts`/`boolean.ts` where appropriate
+3. Preserve the owning package's env-loading and validation pattern
 
 ## Useful Commands
 
@@ -177,17 +179,18 @@ bun run format
 bun run test
 bun run check-types
 bun run db:push
-bun run db:migrate
 bun run clickhouse:init
 ```
+
+Root `bun run test` routes through Turbo to package-specific runners. API and basket use Vitest; use their package scripts. Root `db:migrate` and `db:deploy` have no matching package task; use the actual owning database/deployment procedure. Shared UI primitives live in `packages/ui/src/components` and export through `@databuddy/ui` or `@databuddy/ui/client`; the dashboard List/Chart composables above remain local wrappers.
 
 Targeted package examples:
 
 ```bash
-cd apps/api && bun test
-cd apps/basket && bun test
-cd packages/sdk && bun test
-cd packages/tracker && bun run test:unit
+bun run --cwd apps/api test
+bun run --cwd apps/basket test
+bun run --cwd packages/sdk test
+bun run --cwd packages/tracker test:unit
 bun run workspace --reset
 ```
 
