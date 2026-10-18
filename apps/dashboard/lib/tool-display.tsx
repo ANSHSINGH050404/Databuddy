@@ -101,7 +101,7 @@ const TOOL_LABELS: Record<string, (input: Input) => string> = {
 	list_funnels: () => "Fetching funnels",
 	get_funnel_analytics: () => "Analyzing funnel",
 	get_funnel_analytics_by_referrer: () => "Analyzing funnel by source",
-	create_funnel: crudLabel("funnel")("create"),
+	create_funnel: () => "Create funnel",
 
 	create_flag: crudLabel("flag")("create"),
 	update_flag: crudLabel("flag")("update"),
@@ -130,7 +130,7 @@ const TOOL_LABELS: Record<string, (input: Input) => string> = {
 
 	list_goals: () => "Fetching goals",
 	get_goal_analytics: () => "Analyzing goal",
-	create_goal: crudLabel("goal")("create"),
+	create_goal: () => "Create goal",
 	update_goal: crudLabel("goal")("update"),
 	delete_goal: crudLabel("goal")("delete"),
 
@@ -154,6 +154,12 @@ export function formatToolLabel(toolName: string, input: Input): string {
 }
 
 function formatFieldLabel(key: string): string {
+	if (key === "steps") {
+		return "Steps in order";
+	}
+	if (key === "ignoreHistoricData") {
+		return "Count only data after creation";
+	}
 	const words = key
 		.replace(FIELD_WORD_BOUNDARY, "$1 $2")
 		.toLowerCase()

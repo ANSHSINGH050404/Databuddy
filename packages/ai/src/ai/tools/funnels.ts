@@ -85,7 +85,7 @@ function readFunnelAnalytics(
 	};
 }
 
-export function createFunnelTools() {
+export function createFunnelTools(approvalCard = false) {
 	const listFunnelsTool = tool({
 		description:
 			"List funnels with steps, filters, and metadata. Omit websiteId to use the current website.",
@@ -131,15 +131,25 @@ export function createFunnelTools() {
 		),
 	});
 
+	const creationSchema = z.object({
+		websiteId: z.string(),
+		...funnelFields,
+		confirmed: z.boolean().describe("false=preview, true=apply"),
+	});
 	const createFunnelTool = tool({
-		description: "Create a funnel to track a user journey.",
-		inputSchema: z.object({
-			websiteId: z.string(),
-			...funnelFields,
-			confirmed: z.boolean().describe("false=preview, true=apply"),
-		}),
-		needsApproval: ({ confirmed }) => confirmed === true,
-		execute: async ({ websiteId, confirmed, ...funnel }, options) => {
+		description: approvalCard
+			? "Propose a funnel to track a user journey. The user reviews these exact ordered steps and filters in an approval card before creation. Call once; do not ask for a separate confirmation."
+			: "Create a funnel to track a user journey.",
+		inputSchema: approvalCard
+			? creationSchema.omit({ confirmed: true })
+			: creationSchema,
+		needsApproval:
+			approvalCard ||
+			((input) => "confirmed" in input && input.confirmed === true),
+		execute: async (input, options) => {
+			const { websiteId, confirmed, ...funnel } = creationSchema.parse(
+				approvalCard ? { ...input, confirmed: true } : input
+			);
 			const context = getAppContext(options);
 			try {
 				if (!confirmed) {

@@ -83,7 +83,7 @@ const updateGoalInputSchema = createGoalInputSchema
 		confirmed: createGoalInputSchema.shape.confirmed.default(false),
 	});
 
-export function createGoalTools() {
+export function createGoalTools(approvalCard = false) {
 	const listGoalsTool = tool({
 		description:
 			"List goals with type, target, filters, and metadata. Omit websiteId to use the current website.",
@@ -145,10 +145,19 @@ export function createGoalTools() {
 	});
 
 	const createGoalTool = tool({
-		description: "Create a single-step conversion goal.",
-		inputSchema: createGoalInputSchema,
-		needsApproval: ({ confirmed }) => confirmed === true,
-		execute: async ({ websiteId, confirmed, ...goal }, options) => {
+		description: approvalCard
+			? "Propose a single-step conversion goal. The user reviews these exact fields in an approval card before creation. Call once; do not ask for a separate confirmation."
+			: "Create a single-step conversion goal.",
+		inputSchema: approvalCard
+			? createGoalInputSchema.omit({ confirmed: true })
+			: createGoalInputSchema,
+		needsApproval:
+			approvalCard ||
+			((input) => "confirmed" in input && input.confirmed === true),
+		execute: async (input, options) => {
+			const { websiteId, confirmed, ...goal } = createGoalInputSchema.parse(
+				approvalCard ? { ...input, confirmed: true } : input
+			);
 			const context = getAppContext(options);
 			try {
 				if (!confirmed) {

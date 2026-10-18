@@ -17,9 +17,10 @@ import {
 } from "ai";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { z } from "zod";
+import type { AppContext } from "../config/context";
 import { conversationModelOptions } from "../config/conversation-model";
 import { modelNames } from "../config/models";
-import { createGoalTools } from "../tools/goals";
+import { createConfig } from "./analytics";
 import {
 	claimToolApprovals,
 	createConversationAgent,
@@ -99,7 +100,13 @@ describe("shared conversation execution", () => {
 	});
 
 	it("retries a failed model continuation without repeating its completed mutation, preserving scope and callbacks", async () => {
-		const context = { organizationId: "org-synthetic", mutationMode: "allow" };
+		const context: AppContext = {
+			chatId: "chat-synthetic",
+			currentDateTime: "2026-10-06T00:00:00Z",
+			organizationId: "org-synthetic",
+			mutationMode: "allow",
+			timezone: "UTC",
+		};
 		const effects: string[] = [];
 		const events: string[] = [];
 		let continuations = 0;
@@ -219,7 +226,7 @@ describe("shared conversation execution", () => {
 		const model = new MockLanguageModelV3({
 			modelId: modelNames.balanced,
 			doGenerate: async (call) => {
-				if (call.toolChoice?.type === "none") {
+				if (!call.tools?.length) {
 					return answer("Answer from the evidence gathered so far.");
 				}
 				toolCalls += 1;
@@ -261,25 +268,55 @@ describe("shared conversation execution", () => {
 	});
 });
 
-describe("human approval for writes", () => {
-	const goal = {
-		websiteId: "site-synthetic",
-		type: "PAGE_VIEW",
-		target: "/signup",
-		name: "Signup",
-		confirmed: true,
-	};
-	const confirmation: UIMessage = {
+const creations = [
+	[
+		"create_goal",
+		{
+			websiteId: "site-synthetic",
+			type: "PAGE_VIEW",
+			target: "/signup",
+			name: "Signup",
+			description: "Visitors who reach signup",
+			filters: [{ field: "country", operator: "equals", value: "US" }],
+			ignoreHistoricData: true,
+		},
+	],
+	[
+		"create_funnel",
+		{
+			websiteId: "site-synthetic",
+			name: "Checkout",
+			description: "Visitors who complete the ordered checkout journey",
+			steps: [
+				{ name: "Cart", type: "PAGE_VIEW", target: "/cart" },
+				{ name: "Checkout", type: "PAGE_VIEW", target: "/checkout" },
+				{ name: "Purchase", type: "CUSTOM", target: "purchase_completed" },
+			],
+			filters: [{ field: "country", operator: "equals", value: "US" }],
+			ignoreHistoricData: false,
+		},
+	],
+] as const;
+
+describe.each(
+	creations
+)("dashboard creation approvals (%s)", (toolName, input) => {
+	const request: UIMessage = {
 		id: "user-1",
 		role: "user",
-		parts: [{ type: "text", text: "Yes, create it" }],
+		parts: [
+			{
+				type: "text",
+				text: `Create a ${input.name} ${toolName === "create_goal" ? "goal" : "funnel"}.`,
+			},
+		],
 	};
-	const createGoal: LanguageModelV3StreamPart[] = [
+	const create: LanguageModelV3StreamPart[] = [
 		{
 			type: "tool-call",
-			toolCallId: "call-goal",
-			toolName: "create_goal",
-			input: JSON.stringify(goal),
+			toolCallId: "call-create",
+			toolName,
+			input: JSON.stringify(input),
 		},
 		{
 			type: "finish",
@@ -296,14 +333,25 @@ describe("human approval for writes", () => {
 
 	function setup() {
 		const execute = mock(async (_input: unknown) => ({ success: true }));
+		const config = createConfig({
+			chatId: "chat-synthetic",
+			organizationId: "org-synthetic",
+			timezone: "UTC",
+			userId: "user-synthetic",
+			websiteId: input.websiteId,
+		});
+		const definition = config.tools[toolName];
+		if (!definition) {
+			throw new Error(`Dashboard tool ${toolName} is missing`);
+		}
 		const tools: ToolSet = {
-			create_goal: { ...createGoalTools().create_goal, execute },
+			[toolName]: { ...definition, execute },
 		};
 		const model = new MockLanguageModelV3({
 			modelId: modelNames.balanced,
 			doStream: async ({ prompt }) => ({
 				stream: convertArrayToReadableStream(
-					prompt.some((message) => message.role === "tool") ? reply : createGoal
+					prompt.some((message) => message.role === "tool") ? reply : create
 				),
 			}),
 		});
@@ -318,7 +366,10 @@ describe("human approval for writes", () => {
 		};
 
 		async function send(messages: UIMessage[]) {
-			const validation = await safeValidateUIMessages({ messages, tools });
+			const validation = await safeValidateUIMessages({
+				messages,
+				tools: tools as Parameters<typeof safeValidateUIMessages>[0]["tools"],
+			});
 			if (!validation.success) {
 				throw validation.error;
 			}
@@ -377,16 +428,18 @@ describe("human approval for writes", () => {
 		};
 	}
 
-	it("holds a confirmed write for approval instead of executing it", async () => {
+	it("holds the initial creation request for one approval instead of executing it", async () => {
 		const { execute, send } = setup();
-		const { chunks, part } = await send([confirmation]);
+		const { chunks, part } = await send([request]);
 
 		expect(execute).not.toHaveBeenCalled();
-		expect(chunks).toContain("tool-approval-request");
+		expect(
+			chunks.filter((chunk) => chunk === "tool-approval-request")
+		).toHaveLength(1);
 		expect(part).toMatchObject({
-			type: "tool-create_goal",
+			type: `tool-${toolName}`,
 			state: "approval-requested",
-			input: goal,
+			input,
 		});
 	});
 
@@ -398,27 +451,28 @@ describe("human approval for writes", () => {
 		state,
 	}) => {
 		const { execute, send } = setup();
-		const requested = await send([confirmation]);
+		const requested = await send([request]);
 		const { chunks, part } = await send([
-			confirmation,
+			request,
 			answer(requested.assistant, approved),
 		]);
 
 		expect(chunks).not.toContain("error");
-		expect(execute.mock.calls.map(([input]) => input)).toEqual(
-			approved ? [goal] : []
+		expect(chunks).not.toContain("tool-approval-request");
+		expect(execute.mock.calls.map(([payload]) => payload)).toEqual(
+			approved ? [input] : []
 		);
 		expect(part).toMatchObject({ state, approval: { approved } });
 	});
 
 	it("runs an approved write once when the same approval arrives twice", async () => {
 		const { execute, send } = setup();
-		const requested = await send([confirmation]);
+		const requested = await send([request]);
 		const approved = answer(requested.assistant, true);
-		await send([confirmation, approved]);
-		const { part } = await send([confirmation, approved]);
+		await send([request, approved]);
+		const { part } = await send([request, approved]);
 
-		expect(execute.mock.calls.map(([input]) => input)).toEqual([goal]);
+		expect(execute.mock.calls.map(([payload]) => payload)).toEqual([input]);
 		expect(part).toMatchObject({
 			state: "output-denied",
 			approval: { approved: false },
@@ -428,20 +482,20 @@ describe("human approval for writes", () => {
 	it.each([
 		{ request: "unanswered", approved: undefined },
 		{ request: "approved but unrecorded", approved: true },
-	] as const)("closes an $request request when the user sends a new message", async ({
+	] as const)("closes an $request approval when the user sends a new message", async ({
 		approved,
 	}) => {
 		const { execute, model, send } = setup();
-		const requested = await send([confirmation]);
+		const requested = await send([request]);
 		const { chunks } = await send([
-			confirmation,
+			request,
 			approved === undefined
 				? requested.assistant
 				: answer(requested.assistant, approved),
 			{
 				id: "user-2",
 				role: "user",
-				parts: [{ type: "text", text: "Call it Signups instead" }],
+				parts: [{ type: "text", text: "Change the name before creating it." }],
 			},
 		]);
 
@@ -454,7 +508,10 @@ describe("human approval for writes", () => {
 					message.role === "tool" ? message.content : []
 				)
 		).toEqual([
-			expect.objectContaining({ type: "tool-result", toolCallId: "call-goal" }),
+			expect.objectContaining({
+				type: "tool-result",
+				toolCallId: "call-create",
+			}),
 		]);
 	});
 });

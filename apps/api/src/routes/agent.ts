@@ -4,7 +4,6 @@ import {
 	isApiKeyPresent,
 } from "@databuddy/api-keys/resolve";
 import {
-	claimToolApprovals,
 	createConversationAgent,
 	settleStaleToolApprovals,
 } from "@databuddy/ai/agents/conversation";
@@ -45,6 +44,7 @@ import {
 	convertToModelMessages,
 	generateId,
 	generateText,
+	isToolUIPart,
 	pruneMessages,
 	safeValidateUIMessages,
 	smoothStream,
@@ -67,6 +67,12 @@ import { CHAT_TITLE_INSTRUCTIONS } from "@databuddy/ai/prompts/analytics";
 import { prependBackgroundContext } from "@databuddy/ai/prompts/context";
 import { resolveToolIntegrations } from "@databuddy/ai/tools/toolkit";
 import { warnAgentStreamRedisSideEffect } from "./agent-stream-errors";
+import { createAgentRunAbortController } from "./agent-run-abort";
+import {
+	AGENT_APPROVAL_TTL_SECONDS,
+	claimAgentApprovals,
+	createAgentApprovalProposal,
+} from "./agent-approvals";
 
 function getErrorName(error: unknown, fallback = "UnknownError"): string {
 	if (error instanceof Error) {
@@ -201,30 +207,30 @@ async function generateChatTitle(
 	}
 }
 
-const APPROVAL_CLAIM_TTL_SEC = 86_400;
-
 async function claimApproval(
-	chatId: string,
+	scopeKey: string,
 	approvalId: string
 ): Promise<boolean> {
 	try {
 		const claimed = await getRedisCache().set(
-			`agent:approval:${chatId}:${approvalId}`,
+			`agent:approval:claim:${scopeKey}:${approvalId}`,
 			"1",
 			"EX",
-			APPROVAL_CLAIM_TTL_SEC,
+			AGENT_APPROVAL_TTL_SECONDS,
 			"NX"
 		);
 		return claimed === "OK";
 	} catch (error) {
 		captureError(error, { agent_approval_claim_failed: true });
-		return true;
+		throw error;
 	}
 }
 
 const MAX_MESSAGES = 100;
 const MAX_PARTS_PER_MESSAGE = 50;
 const MAX_PROPERTIES_PER_PART = 20;
+const MAX_TEXT_PART_LENGTH = 20_000;
+const MAX_CHAT_HISTORY_LENGTH = 128_000;
 
 // UIMessage parts are polymorphic (text/tool/reasoning/...) and re-validated
 // by safeValidateUIMessages + convertToModelMessages, so we only cap sizes here.
@@ -232,7 +238,10 @@ const UIMessageSchema = t.Object({
 	id: t.String(),
 	role: t.Union([t.Literal("user"), t.Literal("assistant")]),
 	parts: t.Array(
-		t.Record(t.String(), t.Any(), { maxProperties: MAX_PROPERTIES_PER_PART }),
+		t.Object(
+			{ text: t.Optional(t.String({ maxLength: MAX_TEXT_PART_LENGTH })) },
+			{ additionalProperties: true, maxProperties: MAX_PROPERTIES_PER_PART }
+		),
 		{
 			maxItems: MAX_PARTS_PER_MESSAGE,
 		}
@@ -528,6 +537,12 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 				});
 
 				try {
+					if (JSON.stringify(body.messages).length > MAX_CHAT_HISTORY_LENGTH) {
+						throw new AgentError(
+							"invalid_messages",
+							"Conversation history is too large. Start a new chat or shorten the messages."
+						);
+					}
 					const userId = user?.id ?? `apikey:${apiKey?.id}`;
 					const principal = await timeAgentPhase(
 						"prepare_request",
@@ -563,20 +578,36 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 							Boolean(w)
 						);
 
-					if (body.id) {
-						const existingChat = await db.query.agentChats.findFirst({
-							where: { id: chatId },
-							columns: { userId: true, organizationId: true },
-						});
-						if (
-							existingChat &&
-							(existingChat.userId !== userId ||
-								(existingChat.organizationId != null &&
-									existingChat.organizationId !== organizationId))
-						) {
-							throw new AgentError("access_denied", "Access denied to chat");
-						}
+					const existingChat = body.id
+						? await db.query.agentChats.findFirst({
+								where: { id: chatId },
+								columns: {
+									userId: true,
+									organizationId: true,
+									messages: true,
+									updatedAt: true,
+								},
+							})
+						: undefined;
+					if (
+						existingChat &&
+						(existingChat.userId !== userId ||
+							(existingChat.organizationId != null &&
+								existingChat.organizationId !== organizationId))
+					) {
+						throw new AgentError("access_denied", "Access denied to chat");
 					}
+					const approvalScope = {
+						actorId: apiKey ? `apikey:${apiKey.id}` : userId,
+						chatId,
+						organizationId,
+					};
+					const approvalScopeKey = JSON.stringify([
+						organizationId,
+						approvalScope.actorId,
+						chatId,
+					]);
+					const pendingApprovalKey = `agent:approval:pending:${approvalScopeKey}`;
 
 					const timezone = body.timezone ?? "UTC";
 					const lastMessage = getLastMessagePreview(body.messages);
@@ -629,7 +660,11 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 								loadMemoryContext
 									? optionalAgentContext(
 											"memory",
-											getMemoryContextCached(latestUserMessage, userId),
+											getMemoryContextCached(
+												latestUserMessage,
+												userId,
+												defaultWebsiteId ?? undefined
+											),
 											EMPTY_MEMORY_CONTEXT,
 											AGENT_MEMORY_CONTEXT_TIMEOUT_MS,
 											{
@@ -703,6 +738,10 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 							thinking: body.thinking,
 							billingCustomerId,
 							integrations,
+							investigationsEnabled: !(
+								process.env.NODE_ENV === "development" &&
+								process.env.DATABUDDY_CORTAD_MODE === "true"
+							),
 							latestUserMessage,
 						},
 						modelKey,
@@ -731,10 +770,53 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 					if (!validation.success) {
 						throw new AgentError("invalid_messages");
 					}
-					const chatMessages = await claimToolApprovals(
-						settleStaleToolApprovals(validation.data),
-						(approvalId) => claimApproval(chatId, approvalId)
-					);
+					const settledMessages = settleStaleToolApprovals(validation.data);
+					let approvalProposal: unknown =
+						existingChat?.messages && existingChat.updatedAt
+							? createAgentApprovalProposal(
+									{
+										actorId: existingChat.userId,
+										chatId,
+										organizationId: existingChat.organizationId ?? "",
+									},
+									existingChat.messages,
+									existingChat.updatedAt
+								)
+							: null;
+					if (apiKey) {
+						approvalProposal = null;
+						const latest = settledMessages.at(-1);
+						try {
+							if (
+								latest?.role === "assistant" &&
+								latest.parts.some(
+									(part) =>
+										isToolUIPart(part) &&
+										part.state === "approval-responded" &&
+										part.approval.approved
+								)
+							) {
+								const saved = await getRedisCache().get(pendingApprovalKey);
+								approvalProposal = saved ? JSON.parse(saved) : null;
+							} else if (latest?.role === "user") {
+								await getRedisCache().del(pendingApprovalKey);
+							}
+						} catch (error) {
+							captureError(error, {
+								agent_approval_proposal_read_failed: true,
+							});
+							throw new AgentError(
+								"invalid_messages",
+								"The saved approval proposal is temporarily unavailable. No action was run. Try again shortly."
+							);
+						}
+					}
+					const chatMessages = await claimAgentApprovals({
+						messages: settledMessages,
+						proposal: approvalProposal,
+						scope: approvalScope,
+						claim: (approvalId) => claimApproval(approvalScopeKey, approvalId),
+					});
 
 					const modelMessages = await timeAgentPhase(
 						"convert_prune",
@@ -831,14 +913,22 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 								controller.enqueue(chunk);
 							},
 						});
-					const result = await agent.stream({
-						messages: modelMessages,
-						experimental_transform: [
-							ttftTransform,
-							smoothStream({ chunking: "word" }),
-						],
-						options: undefined,
-					});
+					const runAbort = createAgentRunAbortController(request.signal);
+					const result = await agent
+						.stream({
+							abortSignal: runAbort.signal,
+							messages: modelMessages,
+							experimental_transform: [
+								ttftTransform,
+								smoothStream({ chunking: "word" }),
+							],
+							options: undefined,
+						})
+						.catch((error: unknown) => {
+							runAbort.cleanup();
+							throw error;
+						});
+					result.totalUsage.then(runAbort.cleanup, runAbort.cleanup);
 
 					const persistedUserId = user?.id;
 					const persistedOrgId = organizationId;
@@ -930,6 +1020,29 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 										websiteId: defaultWebsiteId,
 									}
 								);
+							}
+							if (apiKey) {
+								try {
+									const proposal = createAgentApprovalProposal(
+										approvalScope,
+										messages,
+										new Date()
+									);
+									if (proposal) {
+										await getRedisCache().set(
+											pendingApprovalKey,
+											JSON.stringify(proposal),
+											"EX",
+											AGENT_APPROVAL_TTL_SECONDS
+										);
+									} else {
+										await getRedisCache().del(pendingApprovalKey);
+									}
+								} catch (error) {
+									captureError(error, {
+										agent_approval_proposal_persist_failed: true,
+									});
+								}
 							}
 							if (!persistedUserId) {
 								return;

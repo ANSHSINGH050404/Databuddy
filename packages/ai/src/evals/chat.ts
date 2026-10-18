@@ -2160,15 +2160,17 @@ function goalCheck(view: RunView): string[] {
 	if (view.surface === "slack") {
 		return readOnlyRedirectCheck(view);
 	}
-	const previewed = view.calls.some(
+	const proposed = view.calls.some(
 		(call) =>
 			call.name === "create_goal" &&
-			!(call.invalid || call.confirmed) &&
+			!call.invalid &&
+			call.heldForApproval &&
+			call.output === undefined &&
 			inputField(call, "target").includes("/signup")
 	);
-	return previewed
+	return proposed
 		? []
-		: ["did not preview a /signup goal with create_goal and confirmed=false"];
+		: ["did not hold a /signup goal for approval without creating it"];
 }
 
 function lastWeekVisitors(world: World): {
@@ -2295,7 +2297,7 @@ const CASES: ChatCase[] = [
 	},
 	{
 		check: goalCheck,
-		id: "create-goal-preview",
+		id: "create-goal-approval",
 		kind: "quality",
 		prompt: "create a goal for /signup",
 		summary:
@@ -2498,7 +2500,10 @@ function grade(
 } {
 	const notes: string[] = [];
 	const failures = [
-		...(view.answer.trim() ? [] : ["empty answer"]),
+		...(view.answer.trim() ||
+		view.calls.some((call) => call.heldForApproval && !call.invalid)
+			? []
+			: ["empty answer"]),
 		...writeFailures(testCase, view),
 		...(testCase.kind === "quality"
 			? unsupportedNumberFailures(view, notes)

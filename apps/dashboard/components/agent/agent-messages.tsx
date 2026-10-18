@@ -247,7 +247,11 @@ function ToolApprovalRequest({ tool }: { tool: ToolMessagePart }) {
 	}
 
 	const name = getToolName(tool);
-	const fields = formatToolApprovalFields(input).map((field) => {
+	const definitionCreation = name === "create_goal" || name === "create_funnel";
+	const reviewedInput = definitionCreation
+		? { filters: [], ignoreHistoricData: false, ...input }
+		: input;
+	const fields = formatToolApprovalFields(reviewedInput).map((field) => {
 		if (field.key !== "websiteId") {
 			return field;
 		}
@@ -292,11 +296,18 @@ function InspectableToolStep({
 	const queries = steps.flatMap(getToolQueries);
 
 	return (
-		<Tool status={status} title={displayLabel}>
+		<Tool
+			defaultOpen={status === "denied" && Boolean(tool.approval?.reason)}
+			status={status}
+			title={displayLabel}
+		>
 			<ToolDetail>
 				<ToolInput input={getDisplayInput(tool)} />
 				{hasOutput || !isActive ? (
-					<ToolOutput error={status === "error"} output={tool.output} />
+					<ToolOutput
+						error={status === "error"}
+						output={tool.output ?? tool.approval?.reason}
+					/>
 				) : null}
 				{queries.map((query) => (
 					<ToolQuery

@@ -37,6 +37,7 @@ import {
 } from "@/rpc/handlers";
 import { openApiHandler } from "@/rpc/openapi";
 import { agent } from "./routes/agent";
+import { createCortadRoutes } from "./routes/cortad";
 import { discovery } from "./routes/discovery";
 import { health } from "./routes/health";
 import { integrations } from "./routes/integrations";
@@ -69,6 +70,10 @@ function handleRpcEndpoint({ request }: RequestContext) {
 			context,
 		})
 	);
+}
+
+async function handleCortadChat(request: Request): Promise<Response> {
+	return await agent.handle(request);
 }
 
 function handleOpenApiReference({ request }: RequestContext) {
@@ -163,6 +168,7 @@ const app = new Elysia({ precompile: true })
 	})
 	.use(query)
 	.use(agent)
+	.use(createCortadRoutes(handleCortadChat))
 	.use(integrations)
 	.use(githubIntegrationRoutes)
 	.use(mcp)

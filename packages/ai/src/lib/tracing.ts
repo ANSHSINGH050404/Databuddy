@@ -62,10 +62,15 @@ export function captureError<Fields extends object = Record<string, unknown>>(
 		return;
 	}
 	if (requestLog) {
+		// Evlog merges repeated errors recursively. Keep SDK Error/Response causes
+		// out of that mutable log context; their properties can be readonly.
+		const loggedError = new Error(err.message);
+		loggedError.name = err.name;
+		loggedError.stack = err.stack;
 		if (payload) {
-			requestLog.error(err, payload);
+			requestLog.error(loggedError, payload);
 		} else {
-			requestLog.error(err);
+			requestLog.error(loggedError);
 		}
 		return;
 	}

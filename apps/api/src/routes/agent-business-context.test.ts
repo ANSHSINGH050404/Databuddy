@@ -22,6 +22,8 @@ const state = vi.hoisted(() => ({
 	billedUsage: vi.fn(),
 	rateLimit: vi.fn(),
 	memoryEnabled: false,
+	loadMemory: false,
+	recalledMemory: vi.fn(),
 	storedMemory: vi.fn(),
 	ask: vi.fn(),
 	stream: vi.fn(),
@@ -149,14 +151,13 @@ vi.mock("@databuddy/ai/config/models", () => ({
 }));
 vi.mock("@databuddy/ai/lib/supermemory", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@databuddy/ai/lib/supermemory")>()),
-	formatMemoryForPrompt: () => "",
 	isMemoryEnabled: () => state.memoryEnabled,
 	storeConversation: state.storedMemory,
 }));
 vi.mock("@databuddy/ai/agents/cache", () => ({
 	getAgentContextSnapshot: async () => ({ context: "", source: "miss" }),
-	getMemoryContextCached: vi.fn(),
-	shouldLoadMemoryContext: () => false,
+	getMemoryContextCached: state.recalledMemory,
+	shouldLoadMemoryContext: () => state.loadMemory,
 }));
 vi.mock("@databuddy/ai/lib/ai-logger", () => ({
 	getAILogger: () => ({ wrap: (model: unknown) => model }),
@@ -172,6 +173,18 @@ vi.mock("evlog/elysia", () => ({
 vi.mock("@databuddy/redis/rate-limit", () => ({
 	ratelimit: state.rateLimit,
 }));
+vi.mock("@databuddy/redis", () => ({
+	cacheable: (fn: (...args: unknown[]) => unknown) => fn,
+	cacheNamespaces: {
+		organizationOwner: "synthetic-owner",
+		memberRole: "synthetic-member",
+	},
+	getRedisCache: () => ({
+		get: async () => null,
+		set: async () => "OK",
+		del: async () => 1,
+	}),
+}));
 vi.mock("@databuddy/redis/stream-buffer", () => ({
 	appendStreamChunk: async () => {},
 	clearActiveStream: async () => {},
@@ -185,10 +198,11 @@ vi.mock("@databuddy/redis/stream-buffer", () => ({
 
 const { agent } = await import("./agent");
 
-async function chat(input: Record<string, unknown> = {}) {
+async function chat(input: Record<string, unknown> = {}, signal?: AbortSignal) {
 	const response = await agent.handle(
 		new Request("http://localhost/v1/agent/chat", {
 			method: "POST",
+			signal,
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				id: "chat-synthetic",
@@ -234,6 +248,8 @@ beforeEach(() => {
 	state.apiKey = null;
 	state.chatOrg = "org-synthetic";
 	state.memoryEnabled = false;
+	state.loadMemory = false;
+	state.recalledMemory.mockReset();
 	state.storedMemory.mockReset();
 	state.ask.mockReset().mockResolvedValue({
 		answer: "Synthetic answer.",
@@ -245,6 +261,66 @@ beforeEach(() => {
 });
 
 describe("dashboard canonical business context through the native HTTP/model stream", () => {
+	it("passes client cancellation through to the model transport", async () => {
+		const controller = new AbortController();
+		expect((await chat({}, controller.signal)).status).toBe(200);
+		const signal = state.prompts.at(-1)?.abortSignal;
+		expect(signal).toBeInstanceOf(AbortSignal);
+		controller.abort(new Error("Synthetic cancellation"));
+		expect(signal?.aborted).toBe(true);
+	});
+
+	it("rejects oversized text before reading context or calling the model", async () => {
+		const response = await chat({
+			messages: [
+				{
+					id: "large",
+					role: "user",
+					parts: [{ type: "text", text: "x".repeat(20_001) }],
+				},
+			],
+		});
+		expect(response.status).toBe(422);
+		expect(state.read).not.toHaveBeenCalled();
+		expect(state.prompts).toHaveLength(0);
+	});
+
+	it("rejects excessive aggregate history even when individual text parts fit", async () => {
+		const response = await chat({
+			messages: Array.from({ length: 10 }, (_, index) => ({
+				id: `large-${index}`,
+				role: "user",
+				parts: [{ type: "text", text: "x".repeat(16_000) }],
+			})),
+		});
+		expect(response.status).toBe(400);
+		expect(state.read).not.toHaveBeenCalled();
+		expect(state.prompts).toHaveLength(0);
+	});
+
+	it("includes tool payloads in the history budget", async () => {
+		const response = await chat({
+			messages: [
+				{
+					id: "large-tool",
+					role: "assistant",
+					parts: [
+						{
+							type: "tool-get_data",
+							toolCallId: "synthetic",
+							state: "output-available",
+							input: {},
+							output: { data: "x".repeat(130_000) },
+						},
+					],
+				},
+			],
+		});
+		expect(response.status).toBe(400);
+		expect(state.read).not.toHaveBeenCalled();
+		expect(state.prompts).toHaveLength(0);
+	});
+
 	it("pairs absent/saved profiles with identical questions and memory disabled", async () => {
 		for (const present of [false, true]) {
 			state.profile = present ? profile : null;
@@ -272,7 +348,7 @@ describe("dashboard canonical business context through the native HTTP/model str
 	});
 	it("delivers organization-wide context with no selected website", async () => {
 		expect((await chat({ websiteId: undefined })).status).toBe(200);
-		expect(JSON.stringify(state.prompts[0].prompt)).toContain(meaning);
+		expect(JSON.stringify(state.prompts[0]?.prompt)).toContain(meaning);
 	});
 	it("delivers team-only settings and preserves mixed legacy meanings as assertions", async () => {
 		for (const content of ["", `${meaning}. Public capability claims.`]) {
@@ -294,9 +370,9 @@ describe("dashboard canonical business context through the native HTTP/model str
 			200
 		);
 		expect(state.read).not.toHaveBeenCalled();
-		expect(JSON.stringify(state.prompts[0].prompt)).not.toContain(meaning);
+		expect(JSON.stringify(state.prompts[0]?.prompt)).not.toContain(meaning);
 		for (const assertion of Object.values(teamContext)) {
-			expect(JSON.stringify(state.prompts[0].prompt)).not.toContain(assertion);
+			expect(JSON.stringify(state.prompts[0]?.prompt)).not.toContain(assertion);
 		}
 	});
 	it("rejects an inaccessible organization, site or existing chat before reading profiles", async () => {
@@ -310,7 +386,7 @@ describe("dashboard canonical business context through the native HTTP/model str
 	it("continues the stream with explicit uncertainty when the profile read fails", async () => {
 		state.read.mockRejectedValueOnce(new Error("synthetic read failure"));
 		expect((await chat()).status).toBe(200);
-		expect(JSON.stringify(state.prompts[0].prompt)).toContain(
+		expect(JSON.stringify(state.prompts[0]?.prompt)).toContain(
 			"unavailable for this turn"
 		);
 		expect(state.read).toHaveBeenCalledTimes(1);
@@ -375,6 +451,29 @@ describe("dashboard executed model attribution", () => {
 });
 
 describe("dashboard memory writes", () => {
+	it("recalls website context through the server-authorized principal", async () => {
+		state.memoryEnabled = true;
+		state.loadMemory = true;
+		state.recalledMemory.mockImplementation(
+			async (_query: string, _user: string, websiteId?: string) => ({
+				staticProfile: [],
+				dynamicProfile: [],
+				relevantMemories: [
+					websiteId === site.id
+						? "Synthetic site-specific goal"
+						: "Synthetic unrelated project goal",
+				],
+			})
+		);
+		expect((await chat()).status).toBe(200);
+		const prompt = JSON.stringify(state.prompts.at(-1)?.prompt);
+		expect(prompt).toContain("Synthetic site-specific goal");
+		expect(prompt).not.toContain("Synthetic unrelated project goal");
+		expect(
+			(await chat({ websiteId: "inaccessible-synthetic-site" })).status
+		).toBe(403);
+		expect(state.recalledMemory).toHaveBeenCalledTimes(1);
+	});
 	it("stores memory only when the latest user message asks to remember", async () => {
 		state.memoryEnabled = true;
 		expect((await chat()).status).toBe(200);

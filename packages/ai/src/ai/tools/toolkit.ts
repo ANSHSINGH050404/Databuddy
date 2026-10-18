@@ -88,8 +88,8 @@ export async function resolveToolIntegrations(
 	};
 }
 
-const GOAL_TOOLS = createGoalTools();
-const FUNNEL_TOOLS = createFunnelTools();
+const GOAL_TOOLS = createGoalTools(true);
+const FUNNEL_TOOLS = createFunnelTools(true);
 
 const ANALYTICS_TOOLS: ToolSet = {
 	list_websites: listWebsitesTool,

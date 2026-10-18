@@ -12,14 +12,17 @@ import { stopAtMaxSteps } from "./stop-conditions";
 import type { AgentConfig, AgentContext } from "./types";
 
 export function createConfig(
-	context: AgentContext & { integrations?: ToolIntegrations },
+	context: AgentContext & {
+		integrations?: ToolIntegrations;
+		investigationsEnabled?: boolean;
+	},
 	modelKey: AgentModelKey = "balanced",
 	modelOverride?: string | null
 ): AgentConfig {
 	const modelId = modelOverride ?? modelNames[modelKey];
 	const options = conversationModelOptions(modelId, context.thinking);
 
-	const tools = createToolkit({
+	const toolkit = createToolkit({
 		capabilities: [
 			"analytics",
 			"investigation",
@@ -32,6 +35,16 @@ export function createConfig(
 		organizationId: context.organizationId,
 		userId: context.userId,
 	});
+
+	const tools =
+		context.investigationsEnabled === false
+			? Object.fromEntries(
+					Object.entries(toolkit).filter(
+						([name]) =>
+							name !== "investigations" && name !== "configure_investigations"
+					)
+				)
+			: toolkit;
 
 	const appContext: AppContext = {
 		userId: context.userId,

@@ -107,6 +107,7 @@ export function createConversationAgent(
 		...callbacks,
 		prepareStep({ messages, stepNumber }) {
 			const toolChoice = stepNumber >= MAX_AGENT_STEPS - 1 ? "none" : undefined;
+			const activeTools = toolChoice === "none" ? [] : config.activeTools;
 			const last = messages.at(-1);
 			if (
 				config.model.modelId.startsWith("anthropic/") &&
@@ -119,9 +120,10 @@ export function createConversationAgent(
 						{ ...last, providerOptions: ANTHROPIC_CACHE_1H },
 					],
 					toolChoice,
+					activeTools,
 				};
 			}
-			return { messages, toolChoice };
+			return { messages, toolChoice, activeTools };
 		},
 	});
 }

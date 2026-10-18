@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { asSchema, type ToolSet } from "ai";
 import { createConfig } from "../agents/analytics";
+import { createFunnelTools } from "./funnels";
+import { createGoalTools } from "./goals";
 import { createToolkit, type ToolIntegrations } from "./toolkit";
 
 describe("connected agent tools", () => {
@@ -36,7 +38,7 @@ describe("connected agent tools", () => {
 });
 
 describe("dashboard write approvals", () => {
-	test("every tool with a confirmed input waits for approval only when confirmed", async () => {
+	test("creation uses one approval while existing confirmed tools retain preview approval", async () => {
 		const { tools } = createConfig({
 			chatId: "chat_1",
 			organizationId: "org_1",
@@ -56,6 +58,26 @@ describe("dashboard write approvals", () => {
 			name: string;
 			preview: boolean;
 		}> = [];
+		const legacyCreations: ToolSet = {
+			create_goal: createGoalTools().create_goal,
+			create_funnel: createFunnelTools().create_funnel,
+		};
+		for (const [name, legacy] of Object.entries(legacyCreations)) {
+			const creation = tools[name];
+			if (!creation) {
+				throw new Error(`Dashboard tool ${name} is missing`);
+			}
+			const [creationSchema, legacySchema] = await Promise.all([
+				asSchema(creation.inputSchema).jsonSchema,
+				asSchema(legacy.inputSchema).jsonSchema,
+			]);
+			expect(creationSchema.properties).not.toHaveProperty("confirmed");
+			expect(legacySchema.properties).toHaveProperty("confirmed");
+			expect(await needsApproval(creation, false)).toBe(true);
+			expect(await needsApproval(creation, true)).toBe(true);
+			expect(await needsApproval(legacy, false)).toBe(false);
+			expect(await needsApproval(legacy, true)).toBe(true);
+		}
 		for (const [name, definition] of Object.entries(tools)) {
 			const { properties } = await asSchema(definition.inputSchema).jsonSchema;
 			if (properties && "confirmed" in properties) {
@@ -68,8 +90,6 @@ describe("dashboard write approvals", () => {
 		}
 		expect(decisions.map(({ name }) => name)).toEqual(
 			expect.arrayContaining([
-				"create_goal",
-				"create_funnel",
 				"update_flag",
 				"delete_link",
 				"delete_annotation",
