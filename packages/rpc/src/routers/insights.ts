@@ -8,17 +8,7 @@ import {
 	SELF_HOSTED_INVESTIGATIONS_MESSAGE,
 } from "@databuddy/shared/billing";
 import { appliedInsightActionReply } from "@databuddy/shared/insights";
-import {
-	and,
-	db,
-	desc,
-	eq,
-	inArray,
-	isNull,
-	ne,
-	notExists,
-	sql,
-} from "@databuddy/db";
+import { and, db, desc, eq, inArray, isNull, or, sql } from "@databuddy/db";
 import {
 	analyticsInsights,
 	funnelDefinitions,
@@ -45,6 +35,7 @@ import {
 	insightReplyStatusSchema,
 	insightTimelineItemSchema,
 	insightTimelineReplySchema,
+	insightRecommendationItemSchema,
 	type InsightTimelineInvestigation,
 	investigationShareStateSchema,
 	type InvestigationShareSnapshot,
@@ -68,6 +59,12 @@ import { invalidateFunnelsCache } from "../lib/funnels-cache";
 import { insightRepairError } from "./insight-repairs";
 import { logger } from "../lib/logger";
 import { setAuditOrganization } from "../lib/audit";
+import {
+	loadRecommendationsSaved,
+	recommendationExpiresAt,
+	recommendationReadyCondition,
+	recommendationSavedCondition,
+} from "../lib/insight-recommendations";
 import {
 	auditedProcedure,
 	auditedSessionProcedure,
@@ -404,6 +401,37 @@ function serializeInsightBrief(
 		websiteDomain: row.websiteDomain,
 		websiteId: row.websiteId,
 		websiteName: row.websiteName,
+	};
+}
+
+function serializeInsightRecommendation(
+	row: Omit<InsightBriefRow, "superseded"> & {
+		organizationId: string;
+		recheckAt: Date;
+	},
+	saved: z.infer<typeof insightRecommendationItemSchema>["saved"]
+): z.infer<typeof insightRecommendationItemSchema> | null {
+	const outcome = parseInvestigationOutcome(row.outcome);
+	const signal = parseInvestigationSignal(row.signal);
+	if (!(outcome?.recommendation && signal)) {
+		return null;
+	}
+	return {
+		id: row.id,
+		asOf: row.asOf.toISOString(),
+		createdAt: row.createdAt.toISOString(),
+		expiresAt: recommendationExpiresAt(row).toISOString(),
+		status: saved ? "saved" : "ready",
+		saved,
+		investigationId: row.investigationId ?? null,
+		websiteId: row.websiteId,
+		websiteName: row.websiteName,
+		websiteDomain: row.websiteDomain,
+		signal,
+		title: outcome.title,
+		summary: outcome.summary,
+		evidence: outcome.evidence,
+		recommendation: outcome.recommendation,
 	};
 }
 
@@ -1314,6 +1342,113 @@ async function enforcePublicShareRateLimit(
 }
 
 export const insightsRouter = {
+	recommendations: protectedProcedure
+		.route({
+			method: "POST",
+			path: "/insights/recommendations",
+			tags: ["Insights"],
+			summary: "List current evidence-backed recommendations",
+		})
+		.input(
+			z.object({
+				organizationId: z.string().min(1),
+				websiteId: z.string().min(1).optional(),
+				recommendationId: z.string().min(1).optional(),
+				limit: z.number().int().min(1).max(100).default(50),
+				offset: z.number().int().min(0).default(0),
+			})
+		)
+		.output(
+			z.object({
+				hasMore: z.boolean(),
+				recommendations: z.array(insightRecommendationItemSchema),
+			})
+		)
+		.handler(async ({ context, input }) => {
+			await authorizeInsightsRead(context, input);
+			const now = new Date();
+			const { superseded: _superseded, ...selection } = insightBriefSelection;
+			// Choose the current source before checking for a recommendation so a
+			// withdrawn, missing or invalid latest proposal cannot revive older advice.
+			const latest = db
+				.selectDistinctOn(
+					[insightObservations.websiteId, insightObservations.signalKey],
+					{
+						...selection,
+						organizationId: insightObservations.organizationId,
+						recheckAt: insightObservations.recheckAt,
+						id: sql<string>`${insightObservations.id}`.as("recommendation_id"),
+						investigationId: sql<string | null>`${analyticsInsights.id}`.as(
+							"investigation_id"
+						),
+					}
+				)
+				.from(insightObservations)
+				.innerJoin(websites, eq(insightObservations.websiteId, websites.id))
+				.leftJoin(
+					analyticsInsights,
+					and(
+						eq(insightObservations.insightId, analyticsInsights.id),
+						eq(
+							insightObservations.organizationId,
+							analyticsInsights.organizationId
+						),
+						eq(insightObservations.websiteId, analyticsInsights.websiteId),
+						eq(insightObservations.signalKey, analyticsInsights.subjectKey)
+					)
+				)
+				.where(
+					and(
+						eq(insightObservations.organizationId, input.organizationId),
+						input.websiteId
+							? eq(insightObservations.websiteId, input.websiteId)
+							: undefined,
+						isNull(websites.deletedAt)
+					)
+				)
+				.orderBy(
+					insightObservations.websiteId,
+					insightObservations.signalKey,
+					desc(insightObservations.asOf),
+					desc(insightObservations.createdAt),
+					desc(insightObservations.id)
+				)
+				.as("latest_insight_recommendations");
+			const rows = await db
+				.select()
+				.from(latest)
+				.where(
+					and(
+						sql`jsonb_typeof(${latest.outcome}->'recommendation') = 'object'`,
+						or(
+							recommendationReadyCondition(latest, now),
+							recommendationSavedCondition(latest, input.organizationId)
+						),
+						input.recommendationId
+							? eq(latest.id, input.recommendationId)
+							: undefined
+					)
+				)
+				.orderBy(desc(latest.asOf), desc(latest.createdAt), desc(latest.id))
+				.limit(input.limit + 1)
+				.offset(input.offset);
+			const page = rows.slice(0, input.limit);
+			const saved = await loadRecommendationsSaved(
+				db,
+				input.organizationId,
+				page
+			);
+			const recommendations = page.map((row) =>
+				serializeInsightRecommendation(row, saved.get(row.id) ?? null)
+			);
+			return {
+				hasMore: rows.length > input.limit,
+				recommendations: recommendations.flatMap((item) =>
+					item ? [item] : []
+				),
+			};
+		}),
+
 	brief: protectedProcedure
 		.route({
 			method: "POST",
@@ -1407,25 +1542,11 @@ export const insightsRouter = {
 		)
 		.handler(async ({ context, input }) => {
 			await authorizeInsightsRead(context, input);
-			const hasNoActiveReply = notExists(
-				db
-					.select({ id: insightReplies.id })
-					.from(insightReplies)
-					.where(
-						and(
-							eq(insightReplies.insightId, analyticsInsights.id),
-							inArray(insightReplies.status, ["queued", "running"]),
-							ne(insightReplies.intent, "clarification")
-						)
-					)
-			);
-
 			const whereClause = and(
 				eq(analyticsInsights.organizationId, input.organizationId),
 				input.websiteId
 					? eq(analyticsInsights.websiteId, input.websiteId)
 					: undefined,
-				hasNoActiveReply,
 				isNull(websites.deletedAt)
 			);
 

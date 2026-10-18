@@ -35,6 +35,7 @@ interface GoalFormData {
 
 interface EditGoalDialogProps {
 	autocompleteData?: AutocompleteData;
+	draft?: Omit<CreateGoalData, "websiteId">;
 	goal: Goal | null;
 	isOpen: boolean;
 	isSaving: boolean;
@@ -47,6 +48,7 @@ export function EditGoalDialog({
 	onClose,
 	onSave,
 	goal,
+	draft,
 	isSaving,
 	autocompleteData,
 }: EditGoalDialogProps) {
@@ -88,9 +90,10 @@ export function EditGoalDialog({
 				target: "",
 				filters: [],
 				ignoreHistoricData: false,
+				...draft,
 			});
 		}
-	}, [goal, isOpen]);
+	}, [draft, goal, isOpen]);
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -211,9 +214,11 @@ export function EditGoalDialog({
 								{isCreateMode ? "Create goal" : formData.name || "Edit goal"}
 							</Sheet.Title>
 							<Sheet.Description>
-								{isCreateMode
-									? "Track single-step conversions"
-									: "Update goal settings"}
+								{draft
+									? "Review Databuddy's suggested goal before creating it."
+									: isCreateMode
+										? "Track single-step conversions"
+										: "Update goal settings"}
 							</Sheet.Description>
 						</div>
 					</div>

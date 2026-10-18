@@ -109,18 +109,26 @@ function useGoalActions(websiteId: string) {
 	const createMutation = useMutation({
 		...orpc.goals.create.mutationOptions(),
 		meta: { errorTitle: "Failed to create goal" },
-		onSuccess: () => {
+		onSuccess: (_goal, input) => {
 			invalidateAll();
-			toast.success("Goal created");
+			toast.success(
+				input.recommendationId
+					? "Recommendation saved as a goal"
+					: "Goal created"
+			);
 		},
 	});
 
 	const updateMutation = useMutation({
 		...orpc.goals.update.mutationOptions(),
 		meta: { errorTitle: "Failed to update goal" },
-		onSuccess: () => {
+		onSuccess: (_goal, input) => {
 			invalidateAll();
-			toast.success("Goal updated");
+			toast.success(
+				input.recommendationId
+					? "Recommendation saved to the goal"
+					: "Goal updated"
+			);
 		},
 	});
 
@@ -135,7 +143,7 @@ function useGoalActions(websiteId: string) {
 
 	return {
 		refreshAction: invalidateAll,
-		createGoal: (goalData: CreateGoalData) => {
+		createGoal: (goalData: CreateGoalData, recommendationId?: string) => {
 			const input: CreateGoalInput = {
 				websiteId: goalData.websiteId,
 				type: goalData.type as "PAGE_VIEW" | "EVENT" | "CUSTOM",
@@ -145,14 +153,16 @@ function useGoalActions(websiteId: string) {
 				filters: goalData.filters as GoalFilter[] | undefined,
 				ignoreHistoricData: goalData.ignoreHistoricData,
 			};
-			return createMutation.mutateAsync(input);
+			return createMutation.mutateAsync({ ...input, recommendationId });
 		},
 		updateGoal: ({
 			goalId,
 			updates,
+			recommendationId,
 		}: {
 			goalId: string;
 			updates: UpdateGoalData;
+			recommendationId?: string;
 		}) => {
 			const input: UpdateGoalInput = {
 				id: goalId,
@@ -181,7 +191,7 @@ function useGoalActions(websiteId: string) {
 				input.isActive = updates.isActive;
 			}
 
-			return updateMutation.mutateAsync(input);
+			return updateMutation.mutateAsync({ ...input, recommendationId });
 		},
 		deleteGoal: (goalId: string) => deleteMutation.mutateAsync({ id: goalId }),
 		isCreating: createMutation.isPending,

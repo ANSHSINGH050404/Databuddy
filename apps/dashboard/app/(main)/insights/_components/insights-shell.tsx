@@ -21,7 +21,11 @@ import { InvestigationSettings } from "./investigation-settings";
 import { InvestigationsAccessNotice } from "./investigations-access-notice";
 import { isActiveRun } from "../_lib/insight-run";
 
-const INSIGHTS_LIST_ROUTES = new Set(["/insights", "/insights/investigations"]);
+const INSIGHTS_LIST_ROUTES = new Set([
+	"/insights",
+	"/insights/investigations",
+	"/insights/recommendations",
+]);
 
 export function InsightsShell({ children }: { children: ReactNode }) {
 	const pathname = usePathname();
@@ -151,6 +155,12 @@ function InsightsListShell({ children }: { children: ReactNode }) {
 						icon: MagnifyingGlassIcon,
 						id: "investigations",
 						label: "Investigations",
+					},
+					{
+						href: "/insights/recommendations",
+						icon: LightbulbIcon,
+						id: "recommendations",
+						label: "Recommendations",
 					},
 				]}
 				variant="tabs"

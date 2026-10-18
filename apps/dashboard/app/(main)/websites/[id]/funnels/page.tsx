@@ -1,6 +1,8 @@
 "use client";
 
 import { FeatureGate, usePlanLimitMessage } from "@/components/feature-gate";
+import { useOrganizationsContext } from "@/components/providers/organizations-provider";
+import { useQuery } from "@tanstack/react-query";
 import { List } from "@/components/ui/composables/list";
 import { insightDefinitionEditChangesSchema } from "@databuddy/shared/insights";
 import { useAutocompleteData } from "@/hooks/use-autocomplete";
@@ -12,14 +14,11 @@ import {
 } from "@/hooks/use-funnels";
 import type { CreateFunnelData } from "@/types/funnels";
 import { cn } from "@/lib/utils";
+import { orpc } from "@/lib/orpc";
 import { GATED_FEATURES } from "@databuddy/shared/types/features";
 import dynamic from "next/dynamic";
-import {
-	useParams,
-	usePathname,
-	useRouter,
-	useSearchParams,
-} from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { TopBar } from "@/components/layout/top-bar";
@@ -65,18 +64,46 @@ export default function FunnelsPage() {
 	const [editing, setEditing] = useState<FunnelItemData | "new" | null>(null);
 	const [deletingId, setDeletingId] = useState<string | null>(null);
 
-	const router = useRouter();
-	const searchParams = useSearchParams();
+	const [
+		{ command, description, funnelId, name, new: newFunnel, recommendationId },
+		setHandoff,
+	] = useQueryStates(
+		{
+			command: parseAsString,
+			description: parseAsString,
+			funnelId: parseAsString,
+			name: parseAsString,
+			new: parseAsString,
+			recommendationId: parseAsString,
+		},
+		{ history: "replace", scroll: false }
+	);
+	const [recommendedDraft, setRecommendedDraft] = useState<CreateFunnelData>();
+	const [reviewedRecommendationId, setReviewedRecommendationId] =
+		useState<string>();
+	const { activeOrganizationId } = useOrganizationsContext();
+	const recommendation = useQuery({
+		...orpc.insights.recommendations.queryOptions({
+			input: {
+				organizationId: activeOrganizationId ?? "",
+				websiteId,
+				recommendationId: recommendationId ?? "",
+			},
+		}),
+		enabled: Boolean(!isDemoRoute && recommendationId && activeOrganizationId),
+		staleTime: 0,
+		refetchOnMount: "always",
+		meta: { suppressGlobalErrorToast: true },
+	});
 
 	useEffect(() => {
-		if (!isDemoRoute && searchParams.get("new") === "funnel") {
+		if (!isDemoRoute && newFunnel === "funnel") {
+			setRecommendedDraft(undefined);
+			setReviewedRecommendationId(undefined);
 			setEditing("new");
-			const params = new URLSearchParams(searchParams);
-			params.delete("new");
-			const query = params.toString();
-			router.replace(query ? `${pathname}?${query}` : pathname);
+			setHandoff({ new: null });
 		}
-	}, [searchParams, router, pathname, isDemoRoute]);
+	}, [newFunnel, setHandoff, isDemoRoute]);
 
 	const {
 		analyticsMap,
@@ -104,16 +131,81 @@ export default function FunnelsPage() {
 			return;
 		}
 		setEditing("new");
+		setRecommendedDraft(undefined);
+		setReviewedRecommendationId(undefined);
 	};
 
 	useEffect(() => {
-		const command = searchParams.get("command");
-		const funnelId = searchParams.get("funnelId");
+		if (
+			!(recommendationId && recommendation.isSuccess) ||
+			recommendation.isFetching ||
+			isFetching ||
+			listOutcome.status === "loading" ||
+			listOutcome.status === "error"
+		) {
+			return;
+		}
+		const item = recommendation.data.recommendations.find(
+			(item) => item.id === recommendationId
+		);
+		const proposal = item?.recommendation.review;
+		const handoffUpdate: { recommendationId: null; funnelId?: string } = {
+			recommendationId: null,
+		};
+		if (item?.saved) {
+			if (item.saved.definitionType === "funnel" && !item.saved.deleted) {
+				handoffUpdate.funnelId = item.saved.definitionId;
+				toast.info("This recommendation has already been saved.");
+			} else {
+				toast.info("The saved definition is no longer available.");
+			}
+		} else if (proposal?.type === "create_funnel") {
+			if (planLimitMessage) {
+				toast.info(planLimitMessage);
+			} else {
+				setRecommendedDraft({
+					...proposal.draft,
+					description: proposal.draft.description ?? undefined,
+				});
+				setEditing("new");
+				setReviewedRecommendationId(recommendationId);
+			}
+		} else if (proposal?.type === "edit_funnel") {
+			const funnel = funnels.find((item) => item.id === proposal.definitionId);
+			if (funnel) {
+				setEditing({
+					...funnel,
+					name: proposal.changes.name ?? funnel.name,
+					description: proposal.changes.description ?? funnel.description,
+				});
+				setReviewedRecommendationId(recommendationId);
+			} else {
+				toast.error("The recommended funnel no longer exists.");
+			}
+		} else {
+			toast.error(
+				"This recommendation is no longer available. Review the latest recommendations."
+			);
+		}
+		setHandoff(handoffUpdate);
+	}, [
+		funnels,
+		isFetching,
+		listOutcome.status,
+		planLimitMessage,
+		recommendation.data,
+		recommendation.isSuccess,
+		recommendation.isFetching,
+		recommendationId,
+		setHandoff,
+	]);
+
+	useEffect(() => {
 		if (
 			isDemoRoute ||
 			!funnelId ||
-			(command !== "edit-funnel" && command !== "delete-funnel") ||
-			isFetching ||
+			(command && command !== "edit-funnel" && command !== "delete-funnel") ||
+			(command && isFetching) ||
 			listOutcome.status === "loading" ||
 			listOutcome.status === "error"
 		) {
@@ -122,11 +214,22 @@ export default function FunnelsPage() {
 
 		const funnel = funnels.find((candidate) => candidate.id === funnelId);
 		if (!funnel) {
+			if (isFetching) {
+				return;
+			}
 			toast.error("This funnel no longer exists. It may have been deleted.");
+		} else if (!command) {
+			const row = document.getElementById(`funnel-${funnel.id}`);
+			if (!row) {
+				return;
+			}
+			setExpandedId(funnel.id);
+			setSelectedReferrer("all");
+			row.scrollIntoView({ block: "start" });
 		} else if (command === "edit-funnel") {
 			const proposal = insightDefinitionEditChangesSchema.safeParse({
-				description: searchParams.get("description"),
-				name: searchParams.get("name"),
+				description,
+				name,
 			});
 			if (proposal.success) {
 				const proposedFunnel = {
@@ -141,6 +244,7 @@ export default function FunnelsPage() {
 					toast.success("This funnel already matches the recommendation");
 				} else {
 					setEditing(proposedFunnel);
+					setReviewedRecommendationId(undefined);
 				}
 			} else {
 				toast.error(
@@ -151,23 +255,22 @@ export default function FunnelsPage() {
 			setDeletingId(funnel.id);
 		}
 
-		const params = new URLSearchParams(searchParams.toString());
-		params.delete("command");
-		params.delete("description");
-		params.delete("funnelId");
-		params.delete("name");
-		const query = params.toString();
-		router.replace(query ? `${pathname}?${query}` : pathname, {
-			scroll: false,
+		setHandoff({
+			command: null,
+			description: null,
+			funnelId: null,
+			name: null,
 		});
 	}, [
+		command,
+		description,
+		funnelId,
 		funnels,
 		isDemoRoute,
 		isFetching,
 		listOutcome.status,
-		pathname,
-		router,
-		searchParams,
+		name,
+		setHandoff,
 	]);
 
 	const {
@@ -195,24 +298,38 @@ export default function FunnelsPage() {
 
 	const autocomplete = useAutocompleteData(websiteId);
 
+	const closeEditor = () => {
+		setEditing(null);
+		setRecommendedDraft(undefined);
+		setReviewedRecommendationId(undefined);
+	};
+
 	const handleCreate = async (data: CreateFunnelData) => {
 		try {
-			await createAction(data);
-			setEditing(null);
-		} catch {}
+			await createAction(data, reviewedRecommendationId);
+			closeEditor();
+		} catch {
+			// The mutation hook reports the error; keep the editor for retry.
+		}
 	};
 
 	const handleUpdate = async (funnel: FunnelItemData) => {
 		try {
-			await updateAction(funnel.id, {
-				name: funnel.name,
-				description: funnel.description ?? "",
-				steps: funnel.steps,
-				filters: funnel.filters,
-				ignoreHistoricData: funnel.ignoreHistoricData,
-			});
-			setEditing(null);
-		} catch {}
+			await updateAction(
+				funnel.id,
+				{
+					name: funnel.name,
+					description: funnel.description ?? "",
+					steps: funnel.steps,
+					filters: funnel.filters,
+					ignoreHistoricData: funnel.ignoreHistoricData,
+				},
+				reviewedRecommendationId
+			);
+			closeEditor();
+		} catch {
+			// The mutation hook reports the error; keep the editor for retry.
+		}
 	};
 
 	const handleDelete = async (funnelId: string) => {
@@ -250,6 +367,18 @@ export default function FunnelsPage() {
 						</Button>
 					)}
 				</TopBar.Actions>
+				{recommendationId && recommendation.isError ? (
+					<div className="flex items-center gap-2 p-4" role="alert">
+						<p className="text-sm">The recommendation could not be loaded.</p>
+						<Button
+							onClick={() => recommendation.refetch()}
+							size="sm"
+							variant="secondary"
+						>
+							Try again
+						</Button>
+					</div>
+				) : null}
 
 				<div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
 					<List.Content
@@ -283,7 +412,11 @@ export default function FunnelsPage() {
 								funnels={items}
 								loadingAnalyticsIds={loadingIds}
 								onDeleteFunnel={setDeletingId}
-								onEditFunnel={(funnel) => setEditing(funnel)}
+								onEditFunnel={(funnel) => {
+									setReviewedRecommendationId(undefined);
+									setRecommendedDraft(undefined);
+									setEditing(funnel);
+								}}
 								onToggleFunnel={(funnelId) => {
 									setExpandedId(expandedId === funnelId ? null : funnelId);
 									setSelectedReferrer("all");
@@ -323,6 +456,7 @@ export default function FunnelsPage() {
 				{!isDemoRoute && editing !== null && (
 					<EditFunnelDialog
 						autocompleteData={autocomplete.data}
+						draft={editing === "new" ? recommendedDraft : undefined}
 						funnel={
 							typeof editing === "object"
 								? {
@@ -335,7 +469,7 @@ export default function FunnelsPage() {
 						isCreating={isCreating}
 						isOpen
 						isUpdating={isUpdating}
-						onClose={() => setEditing(null)}
+						onClose={closeEditor}
 						onCreate={handleCreate}
 						onSubmit={handleUpdate}
 					/>

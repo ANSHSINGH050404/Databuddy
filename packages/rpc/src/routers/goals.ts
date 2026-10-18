@@ -1,7 +1,7 @@
 import { analyticsCohortSchema } from "@databuddy/shared/analytics-filters";
 import { insightMeasurementSchema } from "@databuddy/shared/insights";
 import { successOutputSchema } from "../lib/schemas";
-import { and, desc, eq, inArray, isNull } from "@databuddy/db";
+import { and, desc, eq, inArray, isNull, sql } from "@databuddy/db";
 import { goals } from "@databuddy/db/schema";
 import { createDrizzleCache, redis } from "@databuddy/redis";
 import { GATED_FEATURES } from "@databuddy/shared/types/features";
@@ -39,6 +39,7 @@ import {
 	toAnalyticsSteps,
 } from "./funnel-steps";
 import { queueDefinitionChangeRechecks } from "./insights";
+import { saveInsightRecommendation } from "../lib/insight-recommendations";
 
 const ANALYTICS_CACHE_TTL = 180;
 const BATCH_CHUNK_SIZE = 255;
@@ -162,6 +163,7 @@ export const goalsRouter = {
 				description: z.string().nullable().optional(),
 				filters: z.array(filterSchema).optional(),
 				ignoreHistoricData: z.boolean().optional(),
+				recommendationId: z.string().min(1).optional(),
 			})
 		)
 		.output(goalOutputSchema)
@@ -173,44 +175,75 @@ export const goalsRouter = {
 				includePlan: true,
 			});
 
-			const existingGoals = await context.db
-				.select({ id: goals.id })
-				.from(goals)
-				.where(
-					and(eq(goals.websiteId, input.websiteId), isNull(goals.deletedAt))
-				);
-
-			requireFeatureWithLimit(
-				workspace.plan,
-				GATED_FEATURES.GOALS,
-				existingGoals.length
-			);
-
 			const createdBy = await workspace.getCreatedBy();
-
-			const [newGoal] = await context.db
-				.insert(goals)
-				.values({
-					id: randomUUIDv7(),
+			const definitionValues = {
+				type: input.type,
+				target: input.target,
+				name: input.name,
+				description: input.description ?? null,
+				filters: input.filters ?? null,
+				ignoreHistoricData: input.ignoreHistoricData ?? false,
+				isActive: true,
+			};
+			const { definition: newGoal, changed } = await saveInsightRecommendation(
+				context,
+				{
+					organizationId: workspace.organizationId,
 					websiteId: input.websiteId,
-					type: input.type,
-					target: input.target,
-					name: input.name,
-					description: input.description,
-					filters: input.filters,
-					ignoreHistoricData: input.ignoreHistoricData ?? false,
-					isActive: true,
-					createdBy,
-				})
-				.returning();
-
-			if (!newGoal) {
-				throw rpcError.internal(
-					"The goal could not be created. Try again in a moment."
-				);
+					recommendationId: input.recommendationId,
+					reviewType: "create_goal",
+					changes: definitionValues,
+					loadDefinition: async (database, id) =>
+						(
+							await database
+								.select()
+								.from(goals)
+								.where(
+									and(
+										eq(goals.id, id),
+										eq(goals.websiteId, input.websiteId),
+										isNull(goals.deletedAt)
+									)
+								)
+								.limit(1)
+								.for("update")
+						)[0],
+					write: async (database) => {
+						const existingGoals = await database
+							.select({ id: goals.id })
+							.from(goals)
+							.where(
+								and(
+									eq(goals.websiteId, input.websiteId),
+									isNull(goals.deletedAt)
+								)
+							);
+						requireFeatureWithLimit(
+							workspace.plan,
+							GATED_FEATURES.GOALS,
+							existingGoals.length
+						);
+						const [goal] = await database
+							.insert(goals)
+							.values({
+								id: randomUUIDv7(),
+								websiteId: input.websiteId,
+								...definitionValues,
+								createdBy,
+							})
+							.returning();
+						if (!goal) {
+							throw rpcError.internal(
+								"The goal could not be created. Try again in a moment."
+							);
+						}
+						return goal;
+					},
+				}
+			);
+			if (changed) {
+				await invalidateGoalsCache(input.websiteId);
 			}
-
-			await invalidateGoalsCache(input.websiteId);
 
 			return newGoal;
 		}),
@@ -234,6 +267,7 @@ export const goalsRouter = {
 				filters: z.array(filterSchema).optional(),
 				ignoreHistoricData: z.boolean().optional(),
 				isActive: z.boolean().optional(),
+				recommendationId: z.string().min(1).optional(),
 			})
 		)
 		.output(goalOutputSchema)
@@ -248,28 +282,60 @@ export const goalsRouter = {
 				throw rpcError.notFound("goal", input.id);
 			}
 
-			await withWorkspace(context, {
+			const workspace = await withWorkspace(context, {
 				websiteId: existingGoal.websiteId,
 				permissions: ["update"],
 			});
 
-			const { id, ...updates } = input;
-			const [updatedGoal] = await context.db
-				.update(goals)
-				.set({ ...updates, updatedAt: new Date() })
-				.where(and(eq(goals.id, id), isNull(goals.deletedAt)))
-				.returning();
-
-			if (!updatedGoal) {
-				throw rpcError.notFound("goal", id);
+			const { id, recommendationId, ...updates } = input;
+			const { definition: updatedGoal, changed } =
+				await saveInsightRecommendation(context, {
+					organizationId: workspace.organizationId,
+					websiteId: existingGoal.websiteId,
+					recommendationId,
+					reviewType: "edit_goal",
+					definitionId: id,
+					changes: updates,
+					loadDefinition: async (database, savedId) =>
+						(
+							await database
+								.select()
+								.from(goals)
+								.where(
+									and(
+										eq(goals.id, savedId),
+										eq(goals.websiteId, existingGoal.websiteId),
+										isNull(goals.deletedAt)
+									)
+								)
+								.limit(1)
+								.for("update")
+						)[0],
+					write: async (database) => {
+						const [goal] = await database
+							.update(goals)
+							.set({
+								...updates,
+								updatedAt: recommendationId
+									? sql`CURRENT_TIMESTAMP`
+									: new Date(),
+							})
+							.where(and(eq(goals.id, id), isNull(goals.deletedAt)))
+							.returning();
+						if (!goal) {
+							throw rpcError.notFound("goal", id);
+						}
+						return goal;
+					},
+				});
+			if (changed) {
+				await invalidateGoalsCache(existingGoal.websiteId);
+				await queueDefinitionChangeRechecks({
+					definitionId: id,
+					type: "goal",
+					websiteId: existingGoal.websiteId,
+				});
 			}
-
-			await invalidateGoalsCache(existingGoal.websiteId);
-			await queueDefinitionChangeRechecks({
-				definitionId: id,
-				type: "goal",
-				websiteId: existingGoal.websiteId,
-			});
 
 			return updatedGoal;
 		}),

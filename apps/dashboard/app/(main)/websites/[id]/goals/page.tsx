@@ -6,15 +6,13 @@ import { Button } from "@databuddy/ui";
 import { DeleteDialog } from "@databuddy/ui/client";
 import { ArrowClockwiseIcon, PlusIcon, TargetIcon } from "@databuddy/ui/icons";
 import { useAtomValue } from "jotai";
-import {
-	useParams,
-	usePathname,
-	useRouter,
-	useSearchParams,
-} from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { useParams, usePathname } from "next/navigation";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { FeatureGate, usePlanLimitMessage } from "@/components/feature-gate";
+import { useOrganizationsContext } from "@/components/providers/organizations-provider";
 import { List } from "@/components/ui/composables/list";
 import { useAutocompleteData } from "@/hooks/use-autocomplete";
 import { useDateFilters } from "@/hooks/use-date-filters";
@@ -31,6 +29,7 @@ import { EditGoalDialog } from "./_components/edit-goal-dialog";
 import { GoalItemSkeleton } from "./_components/goal-item";
 import { GoalsList } from "./_components/goals-list";
 import { cn } from "@/lib/utils";
+import { orpc } from "@/lib/orpc";
 
 function GoalsListSkeleton() {
 	return (
@@ -66,11 +65,38 @@ export default function GoalsPage() {
 	const { id } = useParams();
 	const websiteId = id as string;
 	const pathname = usePathname();
-	const router = useRouter();
-	const searchParams = useSearchParams();
+	const [{ command, description, goalId, name, recommendationId }, setHandoff] =
+		useQueryStates(
+			{
+				command: parseAsString,
+				description: parseAsString,
+				goalId: parseAsString,
+				name: parseAsString,
+				recommendationId: parseAsString,
+			},
+			{ history: "replace", scroll: false }
+		);
 	const isDemoRoute = pathname.startsWith("/demo/");
 	const [deletingGoalId, setDeletingGoalId] = useState<string | null>(null);
 	const [editingGoal, setEditingGoal] = useState<Goal | null>();
+	const [recommendedDraft, setRecommendedDraft] =
+		useState<Omit<CreateGoalData, "websiteId">>();
+	const [reviewedRecommendationId, setReviewedRecommendationId] =
+		useState<string>();
+	const { activeOrganizationId } = useOrganizationsContext();
+	const recommendation = useQuery({
+		...orpc.insights.recommendations.queryOptions({
+			input: {
+				organizationId: activeOrganizationId ?? "",
+				websiteId,
+				recommendationId: recommendationId ?? "",
+			},
+		}),
+		enabled: Boolean(!isDemoRoute && recommendationId && activeOrganizationId),
+		staleTime: 0,
+		refetchOnMount: "always",
+		meta: { suppressGlobalErrorToast: true },
+	});
 
 	const { calendarDateRange: dateRange } = useDateFilters();
 	const globalFilters = useAtomValue(dynamicQueryFiltersAtom);
@@ -103,19 +129,81 @@ export default function GoalsPage() {
 			return;
 		}
 		setEditingGoal(null);
+		setRecommendedDraft(undefined);
+		setReviewedRecommendationId(undefined);
 	};
 
 	useEffect(() => {
-		const command = searchParams.get("command");
-		const goalId = searchParams.get("goalId");
+		if (
+			!(recommendationId && recommendation.isSuccess) ||
+			recommendation.isFetching ||
+			isFetching ||
+			listOutcome.status === "loading" ||
+			listOutcome.status === "error"
+		) {
+			return;
+		}
+		const item = recommendation.data.recommendations.find(
+			(item) => item.id === recommendationId
+		);
+		const proposal = item?.recommendation.review;
+		const handoffUpdate: { recommendationId: null; goalId?: string } = {
+			recommendationId: null,
+		};
+		if (item?.saved) {
+			if (item.saved.definitionType === "goal" && !item.saved.deleted) {
+				handoffUpdate.goalId = item.saved.definitionId;
+				toast.info("This recommendation has already been saved.");
+			} else {
+				toast.info("The saved definition is no longer available.");
+			}
+		} else if (proposal?.type === "create_goal") {
+			if (planLimitMessage) {
+				toast.info(planLimitMessage);
+			} else {
+				setRecommendedDraft(proposal.draft);
+				setEditingGoal(null);
+				setReviewedRecommendationId(recommendationId);
+			}
+		} else if (proposal?.type === "edit_goal") {
+			const goal = goals.find((item) => item.id === proposal.definitionId);
+			if (goal) {
+				setEditingGoal({
+					...goal,
+					name: proposal.changes.name ?? goal.name,
+					description: proposal.changes.description ?? goal.description,
+				});
+				setReviewedRecommendationId(recommendationId);
+			} else {
+				toast.error("The recommended goal no longer exists.");
+			}
+		} else {
+			toast.error(
+				"This recommendation is no longer available. Review the latest recommendations."
+			);
+		}
+		setHandoff(handoffUpdate);
+	}, [
+		goals,
+		isFetching,
+		listOutcome.status,
+		planLimitMessage,
+		recommendation.data,
+		recommendation.isSuccess,
+		recommendation.isFetching,
+		recommendationId,
+		setHandoff,
+	]);
+
+	useEffect(() => {
 		if (isDemoRoute) {
 			return;
 		}
 
 		if (
 			!goalId ||
-			(command !== "edit-goal" && command !== "delete-goal") ||
-			isFetching ||
+			(command && command !== "edit-goal" && command !== "delete-goal") ||
+			(command && isFetching) ||
 			listOutcome.status === "loading" ||
 			listOutcome.status === "error"
 		) {
@@ -124,11 +212,20 @@ export default function GoalsPage() {
 
 		const goal = goals.find((candidate) => candidate.id === goalId);
 		if (!goal) {
+			if (isFetching) {
+				return;
+			}
 			toast.error("This goal no longer exists. It may have been deleted.");
+		} else if (!command) {
+			const row = document.getElementById(`goal-${goal.id}`);
+			if (!row) {
+				return;
+			}
+			row.scrollIntoView({ block: "start" });
 		} else if (command === "edit-goal") {
 			const proposal = insightDefinitionEditChangesSchema.safeParse({
-				description: searchParams.get("description"),
-				name: searchParams.get("name"),
+				description,
+				name,
 			});
 			if (proposal.success) {
 				const proposedGoal = {
@@ -143,6 +240,7 @@ export default function GoalsPage() {
 					toast.success("This goal already matches the recommendation");
 				} else {
 					setEditingGoal(proposedGoal);
+					setReviewedRecommendationId(undefined);
 				}
 			} else {
 				toast.error(
@@ -153,23 +251,22 @@ export default function GoalsPage() {
 			setDeletingGoalId(goal.id);
 		}
 
-		const params = new URLSearchParams(searchParams.toString());
-		params.delete("command");
-		params.delete("description");
-		params.delete("goalId");
-		params.delete("name");
-		const query = params.toString();
-		router.replace(query ? `${pathname}?${query}` : pathname, {
-			scroll: false,
+		setHandoff({
+			command: null,
+			description: null,
+			goalId: null,
+			name: null,
 		});
 	}, [
+		command,
+		description,
+		goalId,
 		goals,
 		isDemoRoute,
 		isFetching,
 		listOutcome.status,
-		pathname,
-		router,
-		searchParams,
+		name,
+		setHandoff,
 	]);
 
 	const goalIds = useMemo(() => goals.map((goal) => goal.id), [goals]);
@@ -181,6 +278,12 @@ export default function GoalsPage() {
 
 	const autocompleteQuery = useAutocompleteData(websiteId);
 
+	const closeEditor = () => {
+		setEditingGoal(undefined);
+		setRecommendedDraft(undefined);
+		setReviewedRecommendationId(undefined);
+	};
+
 	const handleSaveGoal = async (
 		data: Goal | Omit<CreateGoalData, "websiteId">
 	) => {
@@ -188,9 +291,10 @@ export default function GoalsPage() {
 			if ("id" in data && data.id) {
 				await updateGoal({
 					goalId: data.id,
+					recommendationId: reviewedRecommendationId,
 					updates: {
 						name: data.name,
-						description: data.description || undefined,
+						description: data.description ?? null,
 						type: data.type,
 						target: data.target,
 						filters: data.filters ?? undefined,
@@ -201,19 +305,26 @@ export default function GoalsPage() {
 					},
 				});
 			} else {
-				await createGoal({
-					name: data.name,
-					description: data.description || undefined,
-					type: data.type,
-					target: data.target,
-					filters: data.filters ?? undefined,
-					ignoreHistoricData:
-						"ignoreHistoricData" in data ? data.ignoreHistoricData : undefined,
-					websiteId,
-				} as CreateGoalData);
+				await createGoal(
+					{
+						name: data.name,
+						description: data.description || undefined,
+						type: data.type,
+						target: data.target,
+						filters: data.filters ?? undefined,
+						ignoreHistoricData:
+							"ignoreHistoricData" in data
+								? data.ignoreHistoricData
+								: undefined,
+						websiteId,
+					} as CreateGoalData,
+					reviewedRecommendationId
+				);
 			}
-			setEditingGoal(undefined);
-		} catch {}
+			closeEditor();
+		} catch {
+			// The mutation hook reports the error; keep the editor for retry.
+		}
 	};
 
 	const handleDeleteGoal = async (goalId: string) => {
@@ -250,6 +361,18 @@ export default function GoalsPage() {
 						</Button>
 					)}
 				</TopBar.Actions>
+				{recommendationId && recommendation.isError ? (
+					<div className="flex items-center gap-2 p-4" role="alert">
+						<p className="text-sm">The recommendation could not be loaded.</p>
+						<Button
+							onClick={() => recommendation.refetch()}
+							size="sm"
+							variant="secondary"
+						>
+							Try again
+						</Button>
+					</div>
+				) : null}
 
 				<div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
 					<List.Content
@@ -282,7 +405,11 @@ export default function GoalsPage() {
 								goalAnalytics={goalAnalytics}
 								goals={items}
 								onDeleteGoal={(goalId) => setDeletingGoalId(goalId)}
-								onEditGoal={setEditingGoal}
+								onEditGoal={(goal) => {
+									setReviewedRecommendationId(undefined);
+									setRecommendedDraft(undefined);
+									setEditingGoal(goal);
+								}}
 								readOnly={isDemoRoute}
 							/>
 						)}
@@ -293,9 +420,10 @@ export default function GoalsPage() {
 					<EditGoalDialog
 						autocompleteData={autocompleteQuery.data}
 						goal={editingGoal}
+						draft={editingGoal === null ? recommendedDraft : undefined}
 						isOpen
 						isSaving={isCreating || isUpdating}
-						onClose={() => setEditingGoal(undefined)}
+						onClose={closeEditor}
 						onSave={handleSaveGoal}
 					/>
 				)}

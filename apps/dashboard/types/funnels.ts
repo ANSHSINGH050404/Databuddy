@@ -1,3 +1,5 @@
+import type { DataFilter } from "@databuddy/db/schema";
+
 export interface FunnelStep {
 	conditions?: Record<string, unknown>;
 	name: string;
@@ -8,7 +10,7 @@ export interface FunnelStep {
 export interface FunnelFilter {
 	field: string;
 	label?: string;
-	operator: "equals" | "contains" | "not_equals" | "in" | "not_in";
+	operator: DataFilter["operator"];
 	value: string | string[];
 }
 

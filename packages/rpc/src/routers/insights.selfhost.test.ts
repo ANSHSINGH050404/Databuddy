@@ -70,6 +70,7 @@ mock.module("@databuddy/db", () => ({
 	isNull: mock(),
 	ne: mock(),
 	notExists: mock(),
+	or: mock(),
 	sql: mock(),
 	db: { select, transaction },
 }));
@@ -85,7 +86,10 @@ mock.module("@databuddy/redis/rate-limit", () => ({ ratelimit: rateLimit }));
 mock.module("@databuddy/services/business-memory", () => ({
 	getWebsiteBusinessScope: mock(),
 }));
-mock.module("../lib/audit", () => ({ setAuditOrganization: mock() }));
+mock.module("../lib/audit", () => ({
+	appendRpcAuditEvent: mock(async () => undefined),
+	setAuditOrganization: mock(),
+}));
 mock.module("../lib/funnels-cache", () => ({ invalidateFunnelsCache: mock() }));
 mock.module("../lib/goals-cache", () => ({ invalidateGoalsCache: mock() }));
 mock.module("../lib/logger", () => ({

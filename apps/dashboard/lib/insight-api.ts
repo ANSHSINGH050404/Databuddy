@@ -73,6 +73,22 @@ export const insightQueries = {
 			refetchOnWindowFocus: false,
 			retry: 1,
 		}),
+	recommendationsInfinite: (organizationId: string | undefined) =>
+		infiniteQueryOptions({
+			queryKey: [...INSIGHTS_ROOT, "recommendations", organizationId] as const,
+			queryFn: ({ pageParam }) =>
+				orpc.insights.recommendations.call({
+					organizationId: organizationId ?? "",
+					limit: HISTORY_PAGE_SIZE,
+					offset: pageParam,
+				}),
+			initialPageParam: 0,
+			getNextPageParam: (lastPage, _allPages, lastPageParam) =>
+				lastPage.hasMore ? lastPageParam + HISTORY_PAGE_SIZE : undefined,
+			enabled: Boolean(organizationId),
+			staleTime: INSIGHT_CACHE.historyStaleTime,
+			gcTime: INSIGHT_CACHE.gcTime,
+		}),
 };
 
 function fetchInsightsBriefPage(

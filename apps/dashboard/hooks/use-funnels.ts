@@ -42,18 +42,26 @@ function useFunnelActions(websiteId: string) {
 	const createMutation = useMutation({
 		...orpc.funnels.create.mutationOptions(),
 		meta: { errorTitle: "Failed to create funnel" },
-		onSuccess: () => {
+		onSuccess: (_funnel, input) => {
 			invalidateAll();
-			toast.success("Funnel created");
+			toast.success(
+				input.recommendationId
+					? "Recommendation saved as a funnel"
+					: "Funnel created"
+			);
 		},
 	});
 
 	const updateMutation = useMutation({
 		...orpc.funnels.update.mutationOptions(),
 		meta: { errorTitle: "Failed to update funnel" },
-		onSuccess: () => {
+		onSuccess: (_funnel, input) => {
 			invalidateAll();
-			toast.success("Funnel updated");
+			toast.success(
+				input.recommendationId
+					? "Recommendation saved to the funnel"
+					: "Funnel updated"
+			);
 		},
 	});
 
@@ -69,10 +77,18 @@ function useFunnelActions(websiteId: string) {
 	return {
 		refreshAction: invalidateAll,
 
-		createAction: (data: CreateFunnelData) =>
-			createMutation.mutateAsync({ websiteId, ...data }),
-		updateAction: (funnelId: string, updates: Partial<CreateFunnelData>) =>
-			updateMutation.mutateAsync({ id: funnelId, ...updates }),
+		createAction: (data: CreateFunnelData, recommendationId?: string) =>
+			createMutation.mutateAsync({ websiteId, ...data, recommendationId }),
+		updateAction: (
+			funnelId: string,
+			updates: Partial<CreateFunnelData>,
+			recommendationId?: string
+		) =>
+			updateMutation.mutateAsync({
+				id: funnelId,
+				...updates,
+				recommendationId,
+			}),
 		deleteAction: (funnelId: string) =>
 			deleteMutation.mutateAsync({ id: funnelId }),
 

@@ -38,6 +38,7 @@ const defaultFilter: FunnelFilter = {
 
 interface EditFunnelDialogProps {
 	autocompleteData?: AutocompleteData;
+	draft?: CreateFunnelData;
 	funnel: Funnel | null;
 	isCreating?: boolean;
 	isOpen: boolean;
@@ -53,6 +54,7 @@ export function EditFunnelDialog({
 	onSubmit,
 	onCreate,
 	funnel,
+	draft,
 	isUpdating,
 	isCreating = false,
 	autocompleteData,
@@ -105,9 +107,10 @@ export function EditFunnelDialog({
 				isActive: true,
 				createdAt: "",
 				updatedAt: "",
+				...draft,
 			});
 		}
-	}, [formIdentity, funnel, isOpen]);
+	}, [draft, formIdentity, funnel, isOpen]);
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -128,12 +131,7 @@ export function EditFunnelDialog({
 				filters: sanitizedFilters,
 				ignoreHistoricData: formData.ignoreHistoricData,
 			};
-			try {
-				await onCreate(createData);
-				resetForm();
-			} catch {
-				return;
-			}
+			await onCreate(createData);
 		} else {
 			await onSubmit({
 				...formData,
@@ -327,9 +325,11 @@ export function EditFunnelDialog({
 									: formData.name || "Edit funnel"}
 							</Sheet.Title>
 							<Sheet.Description>
-								{isCreateMode
-									? "Track user conversion journeys"
-									: `${formData.steps.length} steps configured`}
+								{draft
+									? "Review Databuddy's suggested funnel before creating it."
+									: isCreateMode
+										? "Track user conversion journeys"
+										: `${formData.steps.length} steps configured`}
 							</Sheet.Description>
 						</div>
 					</div>

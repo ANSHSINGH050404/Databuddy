@@ -39,6 +39,7 @@ import {
 	toAnalyticsSteps,
 } from "./funnel-steps";
 import { queueDefinitionChangeRechecks } from "./insights";
+import { saveInsightRecommendation } from "../lib/insight-recommendations";
 
 const CACHE_TTL = 300;
 const ANALYTICS_CACHE_TTL = 180;
@@ -271,6 +272,7 @@ export const funnelsRouter = {
 				steps: z.array(funnelStepSchema).min(2).max(10),
 				filters: z.array(filterSchema).optional(),
 				ignoreHistoricData: z.boolean().optional(),
+				recommendationId: z.string().min(1).optional(),
 			})
 		)
 		.output(funnelOutputSchema)
@@ -283,44 +285,72 @@ export const funnelsRouter = {
 			});
 
 			const createdBy = await workspace.getCreatedBy();
+			const definitionValues = {
+				name: input.name,
+				description: input.description ?? null,
+				steps: input.steps,
+				filters: input.filters ?? null,
+				ignoreHistoricData: input.ignoreHistoricData ?? false,
+				isActive: true,
+			};
 
-			const existingFunnels = await context.db
-				.select({ id: funnelDefinitions.id })
-				.from(funnelDefinitions)
-				.where(
-					and(
-						eq(funnelDefinitions.websiteId, input.websiteId),
-						isNull(funnelDefinitions.deletedAt)
-					)
-				);
-
-			requireFeatureWithLimit(
-				workspace.plan,
-				GATED_FEATURES.FUNNELS,
-				existingFunnels.length
-			);
-
-			const [newFunnel] = await context.db
-				.insert(funnelDefinitions)
-				.values({
-					id: randomUUIDv7(),
+			const { definition: newFunnel, changed } =
+				await saveInsightRecommendation(context, {
+					organizationId: workspace.organizationId,
 					websiteId: input.websiteId,
-					name: input.name,
-					description: input.description,
-					steps: input.steps,
-					filters: input.filters,
-					ignoreHistoricData: input.ignoreHistoricData ?? false,
-					createdBy,
-				})
-				.returning();
-
-			if (!newFunnel) {
-				throw rpcError.internal(
-					"The funnel could not be created. Try again in a moment."
-				);
+					recommendationId: input.recommendationId,
+					reviewType: "create_funnel",
+					changes: definitionValues,
+					loadDefinition: async (database, id) =>
+						(
+							await database
+								.select()
+								.from(funnelDefinitions)
+								.where(
+									and(
+										eq(funnelDefinitions.id, id),
+										eq(funnelDefinitions.websiteId, input.websiteId),
+										isNull(funnelDefinitions.deletedAt)
+									)
+								)
+								.limit(1)
+								.for("update")
+						)[0],
+					write: async (database) => {
+						const existingFunnels = await database
+							.select({ id: funnelDefinitions.id })
+							.from(funnelDefinitions)
+							.where(
+								and(
+									eq(funnelDefinitions.websiteId, input.websiteId),
+									isNull(funnelDefinitions.deletedAt)
+								)
+							);
+						requireFeatureWithLimit(
+							workspace.plan,
+							GATED_FEATURES.FUNNELS,
+							existingFunnels.length
+						);
+						const [funnel] = await database
+							.insert(funnelDefinitions)
+							.values({
+								id: randomUUIDv7(),
+								websiteId: input.websiteId,
+								...definitionValues,
+								createdBy,
+							})
+							.returning();
+						if (!funnel) {
+							throw rpcError.internal(
+								"The funnel could not be created. Try again in a moment."
+							);
+						}
+						return funnel;
+					},
+				});
+			if (changed) {
+				await invalidateFunnelsCache(input.websiteId);
 			}
-
-			await invalidateFunnelsCache(input.websiteId);
 			return newFunnel;
 		}),
 
@@ -342,6 +372,7 @@ export const funnelsRouter = {
 				filters: z.array(filterSchema).optional(),
 				ignoreHistoricData: z.boolean().optional(),
 				isActive: z.boolean().optional(),
+				recommendationId: z.string().min(1).optional(),
 			})
 		)
 		.output(funnelOutputSchema)
@@ -361,30 +392,65 @@ export const funnelsRouter = {
 				throw rpcError.notFound("funnel", input.id);
 			}
 
-			await withWorkspace(context, {
+			const workspace = await withWorkspace(context, {
 				websiteId: existingFunnel.websiteId,
 				permissions: ["update"],
 			});
 
-			const { id, ...updates } = input;
-			const [updatedFunnel] = await context.db
-				.update(funnelDefinitions)
-				.set({ ...updates, updatedAt: new Date() })
-				.where(
-					and(eq(funnelDefinitions.id, id), isNull(funnelDefinitions.deletedAt))
-				)
-				.returning();
-
-			if (!updatedFunnel) {
-				throw rpcError.notFound("funnel", id);
+			const { id, recommendationId, ...updates } = input;
+			const { definition: updatedFunnel, changed } =
+				await saveInsightRecommendation(context, {
+					organizationId: workspace.organizationId,
+					websiteId: existingFunnel.websiteId,
+					recommendationId,
+					reviewType: "edit_funnel",
+					definitionId: id,
+					changes: updates,
+					loadDefinition: async (database, savedId) =>
+						(
+							await database
+								.select()
+								.from(funnelDefinitions)
+								.where(
+									and(
+										eq(funnelDefinitions.id, savedId),
+										eq(funnelDefinitions.websiteId, existingFunnel.websiteId),
+										isNull(funnelDefinitions.deletedAt)
+									)
+								)
+								.limit(1)
+								.for("update")
+						)[0],
+					write: async (database) => {
+						const [funnel] = await database
+							.update(funnelDefinitions)
+							.set({
+								...updates,
+								updatedAt: recommendationId
+									? sql`CURRENT_TIMESTAMP`
+									: new Date(),
+							})
+							.where(
+								and(
+									eq(funnelDefinitions.id, id),
+									isNull(funnelDefinitions.deletedAt)
+								)
+							)
+							.returning();
+						if (!funnel) {
+							throw rpcError.notFound("funnel", id);
+						}
+						return funnel;
+					},
+				});
+			if (changed) {
+				await invalidateFunnelsCache(existingFunnel.websiteId, id);
+				await queueDefinitionChangeRechecks({
+					definitionId: id,
+					type: "funnel",
+					websiteId: existingFunnel.websiteId,
+				});
 			}
-
-			await invalidateFunnelsCache(existingFunnel.websiteId, id);
-			await queueDefinitionChangeRechecks({
-				definitionId: id,
-				type: "funnel",
-				websiteId: existingFunnel.websiteId,
-			});
 			return updatedFunnel;
 		}),
 
