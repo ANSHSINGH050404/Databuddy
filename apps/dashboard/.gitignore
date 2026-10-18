@@ -18,6 +18,7 @@ apps\dashboard\app\api\stripe
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 
 # production

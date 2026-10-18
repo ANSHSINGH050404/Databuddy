@@ -23,6 +23,7 @@ const e2eDevelopmentBuild =
 	process.env.NODE_ENV === "development";
 
 const nextConfig: NextConfig = {
+	distDir: readBooleanEnv("DATABUDDY_E2E_MODE") ? ".next-e2e" : ".next",
 	async rewrites() {
 		if (!apiProxyUrl) {
 			return [];
