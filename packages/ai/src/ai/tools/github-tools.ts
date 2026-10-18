@@ -128,11 +128,12 @@ async function githubFetch(
 						"GitHub is rate limiting requests; repository access is still connected. Continue with the evidence already gathered or retry this read later.",
 				};
 			}
+			const detail = message ? ` (${message.slice(0, 160)})` : "";
 			return {
 				error:
 					res.status === 403
-						? `GitHub API 403: this endpoint needs a permission the GitHub App lacks; other repository reads still work.${message ? ` (${message.slice(0, 160)})` : ""}`
-						: `GitHub API ${res.status}: ${res.statusText}${message ? ` (${message.slice(0, 160)})` : ""}`,
+						? `GitHub API 403: this endpoint needs a permission the GitHub App lacks; other repository reads still work.${detail}`
+						: `GitHub API ${res.status}: ${res.statusText}${detail}`,
 			};
 		}
 
@@ -840,7 +841,6 @@ async function commitWithLine(
 			return commit;
 		}
 	}
-	return;
 }
 
 export function createGitHubTools(
