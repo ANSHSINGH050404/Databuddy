@@ -767,6 +767,22 @@ export function publicationBasisFor(
 		: "measured_impact";
 }
 
+export const insightFactKindSchema = z.enum([
+	"tracking",
+	"site",
+	"definition",
+	"traffic",
+	"crawler",
+	"business",
+]);
+
+export const insightFactSchema = z.object({
+	kind: insightFactKindSchema,
+	statement: z.string().trim().min(1).max(240),
+});
+
+export type InsightFact = z.infer<typeof insightFactSchema>;
+
 export const investigationOutcomeSchema = z
 	.object({
 		verification: z
@@ -803,6 +819,7 @@ export const investigationOutcomeSchema = z
 		// Supplied background only; does not establish which facts influenced a claim.
 		contextSnapshot: businessContextSchema.optional(),
 		evidence: z.array(z.string().trim().min(1).max(1500)).min(1).max(2),
+		facts: z.array(insightFactSchema).max(2).optional(),
 		publish: z.boolean().optional(),
 		publicationBasis: insightPublicationBasisSchema.nullable().optional(),
 		// Invalid legacy recommendation shapes must not hide an otherwise readable outcome.
@@ -943,6 +960,17 @@ export const agentInvestigationOutcomeSchema = z
 			.nullish()
 			.describe(
 				"Optional useful suggestion independent of next and publication. Use only inspected current evidence for setup drafts and metadata edits; omit speculative or repetitive recommendations."
+			),
+		facts: z
+			.array(
+				insightFactSchema.extend({
+					sources: z.array(agentEvidenceReferenceSchema).min(1).max(4),
+				})
+			)
+			.max(2)
+			.optional()
+			.describe(
+				"Up to two durable facts about this website that a future investigation would otherwise re-derive: how tracking is set up, which host or page is what, a renamed event, a route move, a crawler's pattern. One plain sentence under 25 words, only what you verified this run, with the reads that showed it. Not the finding, not a guess, nothing about this week's numbers."
 			),
 	})
 	.superRefine((outcome, context) => {
