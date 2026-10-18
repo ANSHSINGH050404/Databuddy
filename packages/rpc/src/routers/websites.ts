@@ -543,11 +543,10 @@ function pickTrackingIssueRow(
 	rows: BlockedTrackingIssueRow[],
 	hasEvents: boolean
 ): BlockedTrackingIssueRow | null {
-	const liveRow = rows.find((row) => !isIgnoredTrackingBlockOrigin(row.origin));
-	if (liveRow || hasEvents) {
-		return liveRow ?? null;
-	}
-	return rows[0] ?? null;
+	return (
+		rows.find((row) => !isIgnoredTrackingBlockOrigin(row.origin)) ??
+		(hasEvents ? null : (rows[0] ?? null))
+	);
 }
 
 const buildStatusMessage = (

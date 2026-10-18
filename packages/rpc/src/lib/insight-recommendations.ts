@@ -20,7 +20,7 @@ import type { FunnelStep } from "../routers/funnel-steps";
 
 const MAX_RECOMMENDATION_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 type Transaction = Parameters<Parameters<Context["db"]["transaction"]>[0]>[0];
-type Database = Context["db"] | Transaction;
+export type Database = Context["db"] | Transaction;
 type Definition =
 	| typeof goals.$inferSelect
 	| typeof funnelDefinitions.$inferSelect;
@@ -259,17 +259,9 @@ export async function loadRecommendationsSaved(
 				: [],
 		]);
 	const definitions = {
-		goal: new Map(
-			savedGoals.map((definition): [string, SavedDefinition] => [
-				definition.id,
-				definition,
-			])
-		),
+		goal: new Map(savedGoals.map((definition) => [definition.id, definition])),
 		funnel: new Map(
-			savedFunnels.map((definition): [string, SavedDefinition] => [
-				definition.id,
-				definition,
-			])
+			savedFunnels.map((definition) => [definition.id, definition])
 		),
 	};
 	for (const [sourceId, receipt] of accepted) {

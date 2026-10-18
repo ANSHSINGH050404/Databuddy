@@ -10,12 +10,9 @@ import { insightQueries } from "@/lib/insight-api";
 import { investigationSourceLink } from "../_components/investigation-row";
 
 export default function RecommendationsPage() {
-	const { activeOrganization, activeOrganizationId, isLoading } =
-		useOrganizationsContext();
+	const { activeOrganizationId, isLoading } = useOrganizationsContext();
 	const query = useInfiniteQuery(
-		insightQueries.recommendationsInfinite(
-			activeOrganization?.id ?? activeOrganizationId ?? undefined
-		)
+		insightQueries.recommendationsInfinite(activeOrganizationId ?? undefined)
 	);
 	const items = query.data?.pages.flatMap((page) => page.recommendations) ?? [];
 

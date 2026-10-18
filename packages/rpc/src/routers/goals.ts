@@ -39,7 +39,10 @@ import {
 	toAnalyticsSteps,
 } from "./funnel-steps";
 import { queueDefinitionChangeRechecks } from "./insights";
-import { saveInsightRecommendation } from "../lib/insight-recommendations";
+import {
+	type Database,
+	saveInsightRecommendation,
+} from "../lib/insight-recommendations";
 
 const ANALYTICS_CACHE_TTL = 180;
 const BATCH_CHUNK_SIZE = 255;
@@ -81,6 +84,22 @@ const goalAnalyticsResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 type GoalAnalyticsResult = z.infer<typeof goalAnalyticsResultSchema>;
+
+async function lockGoal(database: Database, id: string, websiteId: string) {
+	const [definition] = await database
+		.select()
+		.from(goals)
+		.where(
+			and(
+				eq(goals.id, id),
+				eq(goals.websiteId, websiteId),
+				isNull(goals.deletedAt)
+			)
+		)
+		.limit(1)
+		.for("update");
+	return definition;
+}
 
 export const goalsRouter = {
 	list: publicProcedure
@@ -193,21 +212,8 @@ export const goalsRouter = {
 					recommendationId: input.recommendationId,
 					reviewType: "create_goal",
 					changes: definitionValues,
-					loadDefinition: async (database, id) =>
-						(
-							await database
-								.select()
-								.from(goals)
-								.where(
-									and(
-										eq(goals.id, id),
-										eq(goals.websiteId, input.websiteId),
-										isNull(goals.deletedAt)
-									)
-								)
-								.limit(1)
-								.for("update")
-						)[0],
+					loadDefinition: (database, id) =>
+						lockGoal(database, id, input.websiteId),
 					write: async (database) => {
 						const existingGoals = await database
 							.select({ id: goals.id })
@@ -296,21 +302,8 @@ export const goalsRouter = {
 					reviewType: "edit_goal",
 					definitionId: id,
 					changes: updates,
-					loadDefinition: async (database, savedId) =>
-						(
-							await database
-								.select()
-								.from(goals)
-								.where(
-									and(
-										eq(goals.id, savedId),
-										eq(goals.websiteId, existingGoal.websiteId),
-										isNull(goals.deletedAt)
-									)
-								)
-								.limit(1)
-								.for("update")
-						)[0],
+					loadDefinition: (database, savedId) =>
+						lockGoal(database, savedId, existingGoal.websiteId),
 					write: async (database) => {
 						const [goal] = await database
 							.update(goals)

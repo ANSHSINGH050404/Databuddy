@@ -1438,13 +1438,11 @@ export const insightsRouter = {
 				input.organizationId,
 				page
 			);
-			const recommendations = page.map((row) =>
-				serializeInsightRecommendation(row, saved.get(row.id) ?? null)
-			);
 			return {
 				hasMore: rows.length > input.limit,
-				recommendations: recommendations.flatMap((item) =>
-					item ? [item] : []
+				recommendations: page.flatMap(
+					(row) =>
+						serializeInsightRecommendation(row, saved.get(row.id) ?? null) ?? []
 				),
 			};
 		}),

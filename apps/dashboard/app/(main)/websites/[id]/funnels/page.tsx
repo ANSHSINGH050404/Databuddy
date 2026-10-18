@@ -78,9 +78,10 @@ export default function FunnelsPage() {
 		},
 		{ history: "replace", scroll: false }
 	);
-	const [recommendedDraft, setRecommendedDraft] = useState<CreateFunnelData>();
-	const [reviewedRecommendationId, setReviewedRecommendationId] =
-		useState<string>();
+	const [review, setReview] = useState<{
+		recommendationId: string;
+		draft?: CreateFunnelData;
+	}>();
 	const { activeOrganizationId } = useOrganizationsContext();
 	const recommendation = useQuery({
 		...orpc.insights.recommendations.queryOptions({
@@ -98,8 +99,7 @@ export default function FunnelsPage() {
 
 	useEffect(() => {
 		if (!isDemoRoute && newFunnel === "funnel") {
-			setRecommendedDraft(undefined);
-			setReviewedRecommendationId(undefined);
+			setReview(undefined);
 			setEditing("new");
 			setHandoff({ new: null });
 		}
@@ -131,8 +131,7 @@ export default function FunnelsPage() {
 			return;
 		}
 		setEditing("new");
-		setRecommendedDraft(undefined);
-		setReviewedRecommendationId(undefined);
+		setReview(undefined);
 	};
 
 	useEffect(() => {
@@ -163,12 +162,14 @@ export default function FunnelsPage() {
 			if (planLimitMessage) {
 				toast.info(planLimitMessage);
 			} else {
-				setRecommendedDraft({
-					...proposal.draft,
-					description: proposal.draft.description ?? undefined,
+				setReview({
+					recommendationId,
+					draft: {
+						...proposal.draft,
+						description: proposal.draft.description ?? undefined,
+					},
 				});
 				setEditing("new");
-				setReviewedRecommendationId(recommendationId);
 			}
 		} else if (proposal?.type === "edit_funnel") {
 			const funnel = funnels.find((item) => item.id === proposal.definitionId);
@@ -178,7 +179,7 @@ export default function FunnelsPage() {
 					name: proposal.changes.name ?? funnel.name,
 					description: proposal.changes.description ?? funnel.description,
 				});
-				setReviewedRecommendationId(recommendationId);
+				setReview({ recommendationId });
 			} else {
 				toast.error("The recommended funnel no longer exists.");
 			}
@@ -244,7 +245,7 @@ export default function FunnelsPage() {
 					toast.success("This funnel already matches the recommendation");
 				} else {
 					setEditing(proposedFunnel);
-					setReviewedRecommendationId(undefined);
+					setReview(undefined);
 				}
 			} else {
 				toast.error(
@@ -300,13 +301,12 @@ export default function FunnelsPage() {
 
 	const closeEditor = () => {
 		setEditing(null);
-		setRecommendedDraft(undefined);
-		setReviewedRecommendationId(undefined);
+		setReview(undefined);
 	};
 
 	const handleCreate = async (data: CreateFunnelData) => {
 		try {
-			await createAction(data, reviewedRecommendationId);
+			await createAction(data, review?.recommendationId);
 			closeEditor();
 		} catch {
 			// The mutation hook reports the error; keep the editor for retry.
@@ -324,7 +324,7 @@ export default function FunnelsPage() {
 					filters: funnel.filters,
 					ignoreHistoricData: funnel.ignoreHistoricData,
 				},
-				reviewedRecommendationId
+				review?.recommendationId
 			);
 			closeEditor();
 		} catch {
@@ -413,8 +413,7 @@ export default function FunnelsPage() {
 								loadingAnalyticsIds={loadingIds}
 								onDeleteFunnel={setDeletingId}
 								onEditFunnel={(funnel) => {
-									setReviewedRecommendationId(undefined);
-									setRecommendedDraft(undefined);
+									setReview(undefined);
 									setEditing(funnel);
 								}}
 								onToggleFunnel={(funnelId) => {
@@ -456,7 +455,7 @@ export default function FunnelsPage() {
 				{!isDemoRoute && editing !== null && (
 					<EditFunnelDialog
 						autocompleteData={autocomplete.data}
-						draft={editing === "new" ? recommendedDraft : undefined}
+						draft={editing === "new" ? review?.draft : undefined}
 						funnel={
 							typeof editing === "object"
 								? {

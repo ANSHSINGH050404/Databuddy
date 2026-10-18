@@ -39,7 +39,10 @@ import {
 	toAnalyticsSteps,
 } from "./funnel-steps";
 import { queueDefinitionChangeRechecks } from "./insights";
-import { saveInsightRecommendation } from "../lib/insight-recommendations";
+import {
+	type Database,
+	saveInsightRecommendation,
+} from "../lib/insight-recommendations";
 
 const CACHE_TTL = 300;
 const ANALYTICS_CACHE_TTL = 180;
@@ -150,6 +153,22 @@ const referrerAnalyticsOutputSchema = z.object({
 const funnelAnalyticsByReferrerOutputSchema = z.object({
 	referrer_analytics: z.array(referrerAnalyticsOutputSchema),
 });
+
+async function lockFunnel(database: Database, id: string, websiteId: string) {
+	const [definition] = await database
+		.select()
+		.from(funnelDefinitions)
+		.where(
+			and(
+				eq(funnelDefinitions.id, id),
+				eq(funnelDefinitions.websiteId, websiteId),
+				isNull(funnelDefinitions.deletedAt)
+			)
+		)
+		.limit(1)
+		.for("update");
+	return definition;
+}
 
 export const funnelsRouter = {
 	list: publicProcedure
@@ -301,21 +320,8 @@ export const funnelsRouter = {
 					recommendationId: input.recommendationId,
 					reviewType: "create_funnel",
 					changes: definitionValues,
-					loadDefinition: async (database, id) =>
-						(
-							await database
-								.select()
-								.from(funnelDefinitions)
-								.where(
-									and(
-										eq(funnelDefinitions.id, id),
-										eq(funnelDefinitions.websiteId, input.websiteId),
-										isNull(funnelDefinitions.deletedAt)
-									)
-								)
-								.limit(1)
-								.for("update")
-						)[0],
+					loadDefinition: (database, id) =>
+						lockFunnel(database, id, input.websiteId),
 					write: async (database) => {
 						const existingFunnels = await database
 							.select({ id: funnelDefinitions.id })
@@ -406,21 +412,8 @@ export const funnelsRouter = {
 					reviewType: "edit_funnel",
 					definitionId: id,
 					changes: updates,
-					loadDefinition: async (database, savedId) =>
-						(
-							await database
-								.select()
-								.from(funnelDefinitions)
-								.where(
-									and(
-										eq(funnelDefinitions.id, savedId),
-										eq(funnelDefinitions.websiteId, existingFunnel.websiteId),
-										isNull(funnelDefinitions.deletedAt)
-									)
-								)
-								.limit(1)
-								.for("update")
-						)[0],
+					loadDefinition: (database, savedId) =>
+						lockFunnel(database, savedId, existingFunnel.websiteId),
 					write: async (database) => {
 						const [funnel] = await database
 							.update(funnelDefinitions)

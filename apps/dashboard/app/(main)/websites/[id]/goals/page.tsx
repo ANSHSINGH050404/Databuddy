@@ -79,10 +79,10 @@ export default function GoalsPage() {
 	const isDemoRoute = pathname.startsWith("/demo/");
 	const [deletingGoalId, setDeletingGoalId] = useState<string | null>(null);
 	const [editingGoal, setEditingGoal] = useState<Goal | null>();
-	const [recommendedDraft, setRecommendedDraft] =
-		useState<Omit<CreateGoalData, "websiteId">>();
-	const [reviewedRecommendationId, setReviewedRecommendationId] =
-		useState<string>();
+	const [review, setReview] = useState<{
+		recommendationId: string;
+		draft?: Omit<CreateGoalData, "websiteId">;
+	}>();
 	const { activeOrganizationId } = useOrganizationsContext();
 	const recommendation = useQuery({
 		...orpc.insights.recommendations.queryOptions({
@@ -129,8 +129,7 @@ export default function GoalsPage() {
 			return;
 		}
 		setEditingGoal(null);
-		setRecommendedDraft(undefined);
-		setReviewedRecommendationId(undefined);
+		setReview(undefined);
 	};
 
 	useEffect(() => {
@@ -161,9 +160,8 @@ export default function GoalsPage() {
 			if (planLimitMessage) {
 				toast.info(planLimitMessage);
 			} else {
-				setRecommendedDraft(proposal.draft);
+				setReview({ recommendationId, draft: proposal.draft });
 				setEditingGoal(null);
-				setReviewedRecommendationId(recommendationId);
 			}
 		} else if (proposal?.type === "edit_goal") {
 			const goal = goals.find((item) => item.id === proposal.definitionId);
@@ -173,7 +171,7 @@ export default function GoalsPage() {
 					name: proposal.changes.name ?? goal.name,
 					description: proposal.changes.description ?? goal.description,
 				});
-				setReviewedRecommendationId(recommendationId);
+				setReview({ recommendationId });
 			} else {
 				toast.error("The recommended goal no longer exists.");
 			}
@@ -240,7 +238,7 @@ export default function GoalsPage() {
 					toast.success("This goal already matches the recommendation");
 				} else {
 					setEditingGoal(proposedGoal);
-					setReviewedRecommendationId(undefined);
+					setReview(undefined);
 				}
 			} else {
 				toast.error(
@@ -280,8 +278,7 @@ export default function GoalsPage() {
 
 	const closeEditor = () => {
 		setEditingGoal(undefined);
-		setRecommendedDraft(undefined);
-		setReviewedRecommendationId(undefined);
+		setReview(undefined);
 	};
 
 	const handleSaveGoal = async (
@@ -291,7 +288,7 @@ export default function GoalsPage() {
 			if ("id" in data && data.id) {
 				await updateGoal({
 					goalId: data.id,
-					recommendationId: reviewedRecommendationId,
+					recommendationId: review?.recommendationId,
 					updates: {
 						name: data.name,
 						description: data.description ?? null,
@@ -318,7 +315,7 @@ export default function GoalsPage() {
 								: undefined,
 						websiteId,
 					} as CreateGoalData,
-					reviewedRecommendationId
+					review?.recommendationId
 				);
 			}
 			closeEditor();
@@ -406,8 +403,7 @@ export default function GoalsPage() {
 								goals={items}
 								onDeleteGoal={(goalId) => setDeletingGoalId(goalId)}
 								onEditGoal={(goal) => {
-									setReviewedRecommendationId(undefined);
-									setRecommendedDraft(undefined);
+									setReview(undefined);
 									setEditingGoal(goal);
 								}}
 								readOnly={isDemoRoute}
@@ -420,7 +416,7 @@ export default function GoalsPage() {
 					<EditGoalDialog
 						autocompleteData={autocompleteQuery.data}
 						goal={editingGoal}
-						draft={editingGoal === null ? recommendedDraft : undefined}
+						draft={editingGoal === null ? review?.draft : undefined}
 						isOpen
 						isSaving={isCreating || isUpdating}
 						onClose={closeEditor}
