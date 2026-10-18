@@ -234,22 +234,21 @@ export function useUptimeHeatmap(
 	days: number,
 	enabled = true
 ) {
-	const { getDataForQuery, isLoading, isError, error, refetch } =
-		useBatchDynamicQuery(
-			schedule.websiteId
-				? { websiteId: schedule.websiteId }
-				: { scheduleId: schedule.id },
-			{
-				start_date: localDayjs()
-					.subtract(days - 1, "day")
-					.startOf("day")
-					.format("YYYY-MM-DD"),
-				end_date: localDayjs().startOf("day").format("YYYY-MM-DD"),
-				granularity: "daily",
-			},
-			HEATMAP_QUERIES,
-			{ enabled }
-		);
+	const { getDataForQuery, isLoading, isError, refetch } = useBatchDynamicQuery(
+		schedule.websiteId
+			? { websiteId: schedule.websiteId }
+			: { scheduleId: schedule.id },
+		{
+			start_date: localDayjs()
+				.subtract(days - 1, "day")
+				.startOf("day")
+				.format("YYYY-MM-DD"),
+			end_date: localDayjs().startOf("day").format("YYYY-MM-DD"),
+			granularity: "daily",
+		},
+		HEATMAP_QUERIES,
+		{ enabled }
+	);
 	return {
 		data: getDataForQuery<Parameters<typeof buildUptimeHeatmapDays>[0][number]>(
 			"uptime-heatmap",
@@ -257,7 +256,6 @@ export function useUptimeHeatmap(
 		),
 		isLoading,
 		isError,
-		error,
 		refetch,
 	};
 }

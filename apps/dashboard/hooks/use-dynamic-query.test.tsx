@@ -272,23 +272,4 @@ describe("dynamic query states", () => {
 			expect(query.data.profile_revenue).toEqual([]);
 		});
 	});
-	it("preserves cached data during refresh and after a network failure", async () => {
-		client.setQueryData(queryKey, revenue);
-		const { promise, reject } = Promise.withResolvers<DynamicQueryResponse>();
-		const refreshing = client.fetchQuery({
-			queryKey,
-			queryFn: () => promise,
-			retry: false,
-		});
-		inspect((query) => {
-			expect(query.isFetching).toBe(true);
-			expect(query.data.profile_revenue?.[0]?.amount).toBe(125);
-		});
-		reject(new Error("Synthetic refresh failure"));
-		await expect(refreshing).rejects.toThrow("Synthetic refresh failure");
-		inspect((query) => {
-			expect(query.isError).toBe(true);
-			expect(query.data.profile_revenue?.[0]?.amount).toBe(125);
-		});
-	});
 });

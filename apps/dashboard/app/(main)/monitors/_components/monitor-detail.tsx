@@ -33,7 +33,6 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { useDateFilters } from "@/hooks/use-date-filters";
-import type { DateRange } from "@/types/analytics";
 import {
 	batchDynamicQueryKeys,
 	fetchDynamicQuery,
@@ -392,7 +391,7 @@ function MonitorDetailBody({
 	title?: string;
 }) {
 	const queryClient = useQueryClient();
-	const { dateRange }: { dateRange: DateRange } = useDateFilters();
+	const { dateRange } = useDateFilters();
 	const [isSheetOpen, setIsSheetOpen] = useState(false);
 	const [isRefreshing, setIsRefreshing] = useState(false);
 	const actions = useMonitorActions(schedule, onRemovedAction);
@@ -424,7 +423,6 @@ function MonitorDetailBody({
 			dateRange.start_date,
 			dateRange.end_date,
 			dateRange.granularity,
-			dateRange.timezone,
 		],
 		initialPageParam: 1,
 		queryFn: async ({ pageParam, signal }) => {

@@ -957,25 +957,22 @@ async function executeDynamicQuery(
 			)
 		);
 
-		for (let i = 0; i < validParameters.length; i++) {
-			const param = validParameters[i];
+		for (const [i, param] of validParameters.entries()) {
 			const result = results[i];
-			if (param) {
-				const error = result ? result.error : QUERY_EXECUTION_ERROR_MESSAGE;
-				if (error) {
-					captureError(new Error(truncateQueryErrorForLog(error)), {
-						query_type: param.request.type,
-						route: "v1/query",
-						step: "execute_batch",
-					});
-				}
-				resultMap.set(param.id, {
-					parameter: param.id,
-					success: !error,
-					data: result?.data || [],
-					error: error ? publicQueryErrorMessage(error) : undefined,
+			const error = result ? result.error : QUERY_EXECUTION_ERROR_MESSAGE;
+			if (error) {
+				captureError(new Error(truncateQueryErrorForLog(error)), {
+					query_type: param.request.type,
+					route: "v1/query",
+					step: "execute_batch",
 				});
 			}
+			resultMap.set(param.id, {
+				parameter: param.id,
+				success: !error,
+				data: result?.data || [],
+				error: error ? publicQueryErrorMessage(error) : undefined,
+			});
 		}
 
 		if (projectType === "website") {

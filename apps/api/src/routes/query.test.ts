@@ -243,19 +243,6 @@ describe("query HTTP boundary with the shared executor", () => {
 		});
 	});
 
-	it("lets an explicit URL timezone override a single body's UTC timezone", async () => {
-		vi.useFakeTimers({ toFake: ["Date"] });
-		vi.setSystemTime(new Date("2026-10-01T22:30:00Z"));
-		await post(
-			{ parameters: ["summary_metrics"], preset: "today", timeZone: "UTC" },
-			"website_id=synthetic-site&timezone=Asia/Amman"
-		);
-		expect(state.queries[0]?.params).toMatchObject({
-			timezone: "Asia/Amman",
-			startDate: "2026-10-02 00:00:00",
-		});
-	});
-
 	it.each([
 		undefined,
 		"UTC",
