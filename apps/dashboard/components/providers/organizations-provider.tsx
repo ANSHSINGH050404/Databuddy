@@ -52,10 +52,8 @@ export function OrganizationsProvider({ children }: { children: ReactNode }) {
 	const queryClient = useQueryClient();
 	const store = useStore();
 
-	// Better Auth raises this signal after every call that changes the session:
-	// switching, creating, deleting or leaving an organization, accepting an
-	// invitation, being removed, and signing out. An explicit switch has already
-	// reset the queries before it navigates.
+	// Every session change raises this signal; an explicit switch resets the
+	// queries itself before it navigates.
 	useEffect(
 		() =>
 			authClient.$store.atoms.$sessionSignal?.listen(() => {

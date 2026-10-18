@@ -23,10 +23,10 @@ import {
 } from "./auth";
 
 const HOUR_MS = 60 * 60 * 1000;
-export const RECOVERY_WAITING_PERIOD_MS = 48 * HOUR_MS;
-export const RECOVERY_EXPIRY_MS = 7 * 24 * HOUR_MS;
-export const DOMAIN_SETTLED_MS = 30 * 24 * HOUR_MS;
-export const RECOVERY_RECORD_PREFIX = "_databuddy-recovery";
+const RECOVERY_WAITING_PERIOD_MS = 48 * HOUR_MS;
+const RECOVERY_EXPIRY_MS = 7 * 24 * HOUR_MS;
+const DOMAIN_SETTLED_MS = 30 * 24 * HOUR_MS;
+const RECOVERY_RECORD_PREFIX = "_databuddy-recovery";
 const RECORD_VALUE_PREFIX = "databuddy-recovery=";
 const DOMAIN_ACTIONS = [
 	auditActions.WEBSITE_CREATED.action,
@@ -36,7 +36,7 @@ const DOMAIN_ACTIONS = [
 
 export class RecoveryRefused extends Error {}
 
-export interface RecoveryAccount {
+interface RecoveryAccount {
 	email: string;
 	enrollmentId: string | null;
 	ownedOrganizationIds: string[];
@@ -52,16 +52,13 @@ export interface RecoveryRequest {
 	ticket: string;
 }
 
-export type TxtResolver = (hostname: string) => Promise<string[][]>;
-export type CnameResolver = (hostname: string) => Promise<string[]>;
-
 const TRAILING_DOT = /\.$/;
 
-export function normalizeDomain(domain: string): string {
+function normalizeDomain(domain: string): string {
 	return domain.trim().toLowerCase().replace(TRAILING_DOT, "");
 }
 
-export function recoveryRecordName(domain: string): string {
+function recoveryRecordName(domain: string): string {
 	return `${RECOVERY_RECORD_PREFIX}.${normalizeDomain(domain)}`;
 }
 
@@ -110,13 +107,6 @@ async function sign(
 		)
 		.digest("hex")
 		.slice(0, 32);
-}
-
-async function tokenFor(
-	request: RecoveryRequest,
-	issuedAt: number
-): Promise<string> {
-	return `${issuedAt.toString(36)}.${await sign(request, issuedAt)}`;
 }
 
 async function issuedAtOf(
@@ -354,7 +344,7 @@ export async function openRecovery(
 			"two_factor_recovery_requested"
 		),
 		recordName: request.domain ? recoveryRecordName(request.domain) : null,
-		recordValue: `${RECORD_VALUE_PREFIX}${await tokenFor(request, issuedAt)}`,
+		recordValue: `${RECORD_VALUE_PREFIX}${issuedAt.toString(36)}.${await sign(request, issuedAt)}`,
 		readyAt: new Date(issuedAt + RECOVERY_WAITING_PERIOD_MS),
 		expiresAt: new Date(issuedAt + RECOVERY_EXPIRY_MS),
 	};
@@ -362,8 +352,8 @@ export async function openRecovery(
 
 async function publishedToken(
 	domain: string,
-	resolveText: TxtResolver,
-	resolveAlias: CnameResolver
+	resolveText: typeof resolveTxt,
+	resolveAlias: typeof resolveCname
 ): Promise<string | null> {
 	const name = recoveryRecordName(domain);
 	const aliases = await resolveAlias(name).catch(() => []);
@@ -385,8 +375,8 @@ export async function completeRecovery(
 	request: RecoveryRequest & { token?: string },
 	options: {
 		now?: Date;
-		resolveText?: TxtResolver;
-		resolveAlias?: CnameResolver;
+		resolveText?: typeof resolveTxt;
+		resolveAlias?: typeof resolveCname;
 	} = {}
 ): Promise<{ notified: boolean }> {
 	const now = options.now ?? new Date();

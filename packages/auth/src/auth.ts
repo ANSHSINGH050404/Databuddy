@@ -930,13 +930,12 @@ const handleSecurityChange = createAuthMiddleware(async (ctx) => {
 		return;
 	}
 	const change = securityChangeFor(ctx.path, session?.user, newSession?.user);
-	const email = (newSession ?? session)?.user.email;
-	if (!(change && email)) {
+	const changedUser = (newSession ?? session)?.user;
+	if (!(change && changedUser)) {
 		return;
 	}
-	const userId = (newSession ?? session)?.user.id;
-	if (userId && change !== "backup_codes_regenerated") {
-		await revokeTrustedDevices(userId);
+	if (change !== "backup_codes_regenerated") {
+		await revokeTrustedDevices(changedUser.id);
 	}
 	if (change === "two_factor_enabled" && newSession) {
 		await signOutEverywhere(
@@ -946,7 +945,7 @@ const handleSecurityChange = createAuthMiddleware(async (ctx) => {
 		);
 	}
 	await sendAuthEmail({
-		to: email,
+		to: changedUser.email,
 		subject: securityChangeSubject(change),
 		template: SecurityChangeEmail({
 			change,

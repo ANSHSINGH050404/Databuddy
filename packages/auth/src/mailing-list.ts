@@ -48,7 +48,7 @@ export function usersMailingList() {
 	return { resend: new Resend(resendApiKey), segmentId: resendUsersSegmentId };
 }
 
-type UsersMailingList = NonNullable<ReturnType<typeof usersMailingList>>;
+export type UsersMailingList = NonNullable<ReturnType<typeof usersMailingList>>;
 
 export async function addToMailingList(
 	{ resend, segmentId }: UsersMailingList,

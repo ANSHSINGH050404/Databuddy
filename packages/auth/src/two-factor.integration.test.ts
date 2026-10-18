@@ -194,8 +194,7 @@ integration("two-factor sign-in", () => {
 			cookie,
 		});
 		expect(verify.status).toBe(200);
-		const enrolled = await db.query.user.findFirst({ where: { id: userId } });
-		expect(enrolled?.twoFactorEnabled).toBe(true);
+		expect(await twoFactorEnabled()).toBe(true);
 	});
 	afterEach(async () => {
 		const memberships = await db

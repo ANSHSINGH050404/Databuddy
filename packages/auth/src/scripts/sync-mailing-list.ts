@@ -5,6 +5,7 @@ import {
 	isMailingListEligible,
 	MailingListError,
 	removeFromMailingList,
+	type UsersMailingList,
 	usersMailingList,
 } from "../mailing-list";
 
@@ -12,8 +13,6 @@ const REQUEST_INTERVAL_MS = 350;
 const RATE_LIMIT_BACKOFF_MS = 2000;
 const MAX_ATTEMPTS = 4;
 const CONCURRENCY = 3;
-
-type UsersMailingList = NonNullable<ReturnType<typeof usersMailingList>>;
 
 async function paced<T>(request: () => Promise<T>): Promise<T> {
 	for (let attempt = 1; ; attempt++) {
