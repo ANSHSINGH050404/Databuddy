@@ -178,7 +178,7 @@ export default function HomePage() {
 								</Button>
 							)
 						}
-						className="rounded-lg border bg-card px-5 py-4"
+						className="rounded border bg-card px-5 py-6"
 						description={
 							siteToInstall
 								? "Your first visitor shows up as soon as someone opens the site with the script installed."
@@ -190,6 +190,7 @@ export default function HomePage() {
 								? `Install tracking on ${siteToInstall.domain} to see your first visitors`
 								: "Add your website to see your first visitors"
 						}
+						variant="default"
 					/>
 				) : null}
 
