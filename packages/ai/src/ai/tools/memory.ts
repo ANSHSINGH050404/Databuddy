@@ -124,7 +124,7 @@ export function createMemoryTools(): Record<string, Tool> {
 					};
 				}
 				return await saveCuratedMemory(args.content, memoryUserId, apiKeyId, {
-					category: args.category ?? "insight",
+					category: args.category,
 					websiteId: websiteId ?? undefined,
 				});
 			},

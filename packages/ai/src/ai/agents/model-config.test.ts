@@ -46,7 +46,7 @@ describe("native conversational model configuration", () => {
 			modelNames.quick
 		);
 		expect(config.model.modelId).toBe(modelNames.quick);
-		expect(config.providerOptions).toBeUndefined();
+		expect(config.providerOptions).toEqual({ gateway: { only: ["google"] } });
 		expect(config.system.providerOptions).toBeUndefined();
 		expect(config.temperature).toBe(0.1);
 	});

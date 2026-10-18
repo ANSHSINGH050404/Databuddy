@@ -76,7 +76,7 @@ export async function claimAgentApprovals({
 	now?: number;
 }): Promise<UIMessage[]> {
 	const latest = messages.at(-1);
-	if (!latest || latest.role !== "assistant") {
+	if (latest?.role !== "assistant") {
 		return messages;
 	}
 	const saved = proposalSchema.safeParse(proposal);

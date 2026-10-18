@@ -49,7 +49,7 @@ export const SessionsBuilders = {
 				SELECT
 					countIf(page_views >= 1) as total_sessions,
 					round(avgIf(duration, page_views >= 1 AND duration > 0), 2) as avg_session_duration,
-						round((countIf(${SESSION_BOUNCE_CONDITION}) / nullIf(countIf(page_views >= 1), 0)) * 100, 2) as bounce_rate,
+					round((countIf(${SESSION_BOUNCE_CONDITION}) / nullIf(countIf(page_views >= 1), 0)) * 100, 2) as bounce_rate,
 					sum(total_events) as total_events
 				FROM session_rollup
 			`,

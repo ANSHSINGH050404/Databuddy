@@ -72,10 +72,6 @@ function handleRpcEndpoint({ request }: RequestContext) {
 	);
 }
 
-async function handleCortadChat(request: Request): Promise<Response> {
-	return await agent.handle(request);
-}
-
 function handleOpenApiReference({ request }: RequestContext) {
 	return handleAnonymousOrpcRequest(request, handleOpenApiRequest);
 }
@@ -168,7 +164,7 @@ const app = new Elysia({ precompile: true })
 	})
 	.use(query)
 	.use(agent)
-	.use(createCortadRoutes(handleCortadChat))
+	.use(createCortadRoutes((request) => agent.handle(request)))
 	.use(integrations)
 	.use(githubIntegrationRoutes)
 	.use(mcp)

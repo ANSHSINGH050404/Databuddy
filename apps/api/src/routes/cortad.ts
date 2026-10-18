@@ -1,11 +1,8 @@
 import { buildHttpErrorResponse } from "@databuddy/shared/http-error-response";
 import { Elysia } from "elysia";
 
-type ChatHandler = (request: Request) => Promise<Response>;
-
-/** Separate Cortad doors exercise the real chat handler with each configured tier. */
 export function createCortadRoutes(
-	handleChat: ChatHandler,
+	handleChat: (request: Request) => Promise<Response>,
 	env: Record<string, string | undefined> = process.env
 ) {
 	const routes = new Elysia({ prefix: "/__cortad" });
@@ -14,12 +11,7 @@ export function createCortadRoutes(
 	}
 
 	async function chat(request: Request, tier: "quick" | "balanced" | "deep") {
-		let body: unknown;
-		try {
-			body = await request.json();
-		} catch {
-			body = null;
-		}
+		const body: unknown = await request.json().catch(() => null);
 		if (!body || typeof body !== "object" || Array.isArray(body)) {
 			const error = buildHttpErrorResponse({
 				code: "PARSE",

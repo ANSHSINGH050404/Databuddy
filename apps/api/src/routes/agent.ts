@@ -771,20 +771,8 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 						throw new AgentError("invalid_messages");
 					}
 					const settledMessages = settleStaleToolApprovals(validation.data);
-					let approvalProposal: unknown =
-						existingChat?.messages && existingChat.updatedAt
-							? createAgentApprovalProposal(
-									{
-										actorId: existingChat.userId,
-										chatId,
-										organizationId: existingChat.organizationId ?? "",
-									},
-									existingChat.messages,
-									existingChat.updatedAt
-								)
-							: null;
+					let approvalProposal: unknown = null;
 					if (apiKey) {
-						approvalProposal = null;
 						const latest = settledMessages.at(-1);
 						try {
 							if (
@@ -810,6 +798,16 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 								"The saved approval proposal is temporarily unavailable. No action was run. Try again shortly."
 							);
 						}
+					} else if (existingChat?.messages && existingChat.updatedAt) {
+						approvalProposal = createAgentApprovalProposal(
+							{
+								actorId: existingChat.userId,
+								chatId,
+								organizationId: existingChat.organizationId ?? "",
+							},
+							existingChat.messages,
+							existingChat.updatedAt
+						);
 					}
 					const chatMessages = await claimAgentApprovals({
 						messages: settledMessages,

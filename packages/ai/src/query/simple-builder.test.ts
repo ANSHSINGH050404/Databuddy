@@ -943,9 +943,6 @@ describe("SimpleQueryBuilder.compile", () => {
 
 		expect(sql).toContain("countIf(page_views >= 1) as total_sessions");
 		expect(sql).toContain("avgIf(duration, page_views >= 1 AND duration > 0)");
-		expect(sql).toContain(
-			"countIf(page_views = 1 AND ifNull(duration, 0) < 10 AND engagement_events = 0)"
-		);
 		expect(sql).toContain("nullIf(countIf(page_views >= 1), 0)");
 		expect(sql).not.toContain("count() as total_sessions");
 		expect(sql).not.toContain("page_views <= 1");

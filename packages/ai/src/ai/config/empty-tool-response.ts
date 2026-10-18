@@ -37,8 +37,10 @@ export const recoverEmptyToolResponse: LanguageModelV3Middleware = {
 	specificationVersion: "v3",
 	wrapStream: async ({ doStream, model, params }) => {
 		const result = await doStream();
-		const lastMessage = params.prompt.at(-1);
-		if (lastMessage?.role !== "tool" || params.toolChoice?.type === "none") {
+		if (
+			params.prompt.at(-1)?.role !== "tool" ||
+			params.toolChoice?.type === "none"
+		) {
 			return result;
 		}
 		let reader = result.stream.getReader();
@@ -47,20 +49,26 @@ export const recoverEmptyToolResponse: LanguageModelV3Middleware = {
 		let exposed = false;
 		let firstUsage: LanguageModelV3Usage | undefined;
 		let cancelled = false;
+		const detachReader = () => {
+			reader.releaseLock();
+			readerAttached = false;
+		};
 		return {
 			...result,
 			stream: new ReadableStream<LanguageModelV3StreamPart>({
 				async pull(controller) {
+					const flushPending = () => {
+						for (const chunk of pending) {
+							controller.enqueue(chunk);
+						}
+						pending.length = 0;
+					};
 					try {
 						while (!cancelled) {
 							const { done, value } = await reader.read();
 							if (done) {
-								for (const chunk of pending) {
-									controller.enqueue(chunk);
-								}
-								pending.length = 0;
-								reader.releaseLock();
-								readerAttached = false;
+								flushPending();
+								detachReader();
 								controller.close();
 								return;
 							}
@@ -73,8 +81,7 @@ export const recoverEmptyToolResponse: LanguageModelV3Middleware = {
 								firstUsage = value.usage;
 								pending.length = 0;
 								await reader.cancel();
-								reader.releaseLock();
-								readerAttached = false;
+								detachReader();
 								const retry = await model.doStream({
 									...params,
 									prompt: [
@@ -90,16 +97,13 @@ export const recoverEmptyToolResponse: LanguageModelV3Middleware = {
 										},
 									],
 									tools: undefined,
-									toolChoice: {
-										type: "none",
-									},
+									toolChoice: { type: "none" },
 								});
 								reader = retry.stream.getReader();
 								readerAttached = true;
 								if (cancelled) {
 									await reader.cancel();
-									reader.releaseLock();
-									readerAttached = false;
+									detachReader();
 									return;
 								}
 								exposed = true;
@@ -114,25 +118,21 @@ export const recoverEmptyToolResponse: LanguageModelV3Middleware = {
 								return;
 							}
 							pending.push(value);
-							const metadata =
+							const isMetadata =
 								value.type === "stream-start" ||
 								value.type === "response-metadata" ||
 								value.type === "text-start" ||
 								value.type === "text-end" ||
 								(value.type === "text-delta" && value.delta.length === 0);
-							if (!metadata || pending.length >= 32) {
-								for (const chunk of pending) {
-									controller.enqueue(chunk);
-								}
-								pending.length = 0;
+							if (!isMetadata || pending.length >= 32) {
+								flushPending();
 								exposed = true;
 								return;
 							}
 						}
 					} catch (error) {
 						if (readerAttached) {
-							reader.releaseLock();
-							readerAttached = false;
+							detachReader();
 						}
 						if (!cancelled) {
 							controller.error(error);

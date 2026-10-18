@@ -305,7 +305,7 @@ describeIntegration("session metric engagement against ClickHouse", () => {
 					expect(Number(row?.sessions ?? row?.total_sessions)).toBe(1);
 					if (type !== "session_metrics" && fixture.exit?.time_on_page) {
 						expect(Number(row?.median_session_duration)).toBe(
-							fixture.exit?.time_on_page ?? 0
+							fixture.exit.time_on_page
 						);
 					}
 					if (type === "events_by_date") {
