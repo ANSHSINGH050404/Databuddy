@@ -65,6 +65,7 @@ import { createPixelResponse, parsePixelQuery } from "@utils/pixel";
 import { parseUserAgent } from "@utils/user-agent";
 import {
 	sanitizeString,
+	sanitizeUrl,
 	VALIDATION_LIMITS,
 	validateSessionId,
 } from "@utils/validation";
@@ -141,7 +142,7 @@ async function processOutgoingLinkData(
 			client_id: clientId,
 			anonymous_id: anonymousId,
 			session_id: validateSessionId(linkData.sessionId),
-			href: sanitizeString(linkData.href, VALIDATION_LIMITS.PATH_MAX_LENGTH),
+			href: sanitizeUrl(linkData.href, VALIDATION_LIMITS.PATH_MAX_LENGTH),
 			text: sanitizeString(linkData.text, VALIDATION_LIMITS.TEXT_MAX_LENGTH),
 			properties: parseProperties(linkData.properties),
 			timestamp,

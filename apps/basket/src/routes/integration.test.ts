@@ -73,7 +73,9 @@ const {
 		mockInsertTrackEvent: vi.fn(() => Promise.resolve()),
 		mockInsertOutgoingLink: vi.fn(() => Promise.resolve()),
 		mockInsertTrackEventsBatch: vi.fn(() => Promise.resolve()),
-		mockInsertOutgoingLinksBatch: vi.fn(() => Promise.resolve()),
+		mockInsertOutgoingLinksBatch: vi.fn(
+			(_events: Array<{ event: { href: string } }>) => Promise.resolve()
+		),
 		mockInsertIndividualVitals: vi.fn(() => Promise.resolve()),
 		mockInsertEngagementSpans: vi.fn((_spans: unknown[]) => Promise.resolve()),
 		mockInsertErrorSpans: vi.fn(() => Promise.resolve()),
@@ -665,6 +667,46 @@ describe("POST /batch", () => {
 				expect.objectContaining({ status: "success", type: "track" }),
 			],
 		});
+	});
+
+	test("outgoing_link href keeps query separators and redacts sensitive params", async () => {
+		mockInsertOutgoingLinksBatch.mockClear();
+
+		const res = await post(basketApp, "/batch", [
+			{
+				type: "outgoing_link",
+				eventId: "evt_link_1",
+				href: "https://partner.example/click?a=1&b=2&token=secret",
+				text: "Partner",
+			},
+		]);
+
+		expect(res.status).toBe(200);
+		expect(mockInsertOutgoingLinksBatch).toHaveBeenCalledOnce();
+		const [batchEvents] = mockInsertOutgoingLinksBatch.mock.calls[0];
+		expect(batchEvents[0].event.href).toBe(
+			"https://partner.example/click?a=1&b=2&token=REDACTED"
+		);
+	});
+
+	test("outgoing_link href redacts sensitive params in hash-routed urls", async () => {
+		mockInsertOutgoingLinksBatch.mockClear();
+
+		const res = await post(basketApp, "/batch", [
+			{
+				type: "outgoing_link",
+				eventId: "evt_link_2",
+				href: "https://partner.example/#/checkout?token=secret&step=2",
+				text: "Checkout",
+			},
+		]);
+
+		expect(res.status).toBe(200);
+		expect(mockInsertOutgoingLinksBatch).toHaveBeenCalledOnce();
+		const [batchEvents] = mockInsertOutgoingLinksBatch.mock.calls[0];
+		expect(batchEvents[0].event.href).toBe(
+			"https://partner.example/#/checkout?token=REDACTED&step=2"
+		);
 	});
 
 	test("returns 503 instead of accepting an event that could not be prepared", async () => {
