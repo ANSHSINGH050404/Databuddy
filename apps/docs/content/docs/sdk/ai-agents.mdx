@@ -77,7 +77,7 @@ On a Vercel Pro or Enterprise plan you can send your request logs instead of add
   {`https://basket.databuddy.cc/vercel/your_website_id`}
 </CodeBlock>
 
-Select the **Static Files**, **Functions**, **Edge Functions** and **Rewrites** sources and the **Production** environment, choose JSON or NDJSON, and leave sampling off. Databuddy keeps only requests from AI agents, from hosts that belong to your website. Vercel bills drains by volume.
+Select the **Static Files**, **Functions**, **Edge Functions** and **Rewrites** sources and the **Production** environment, choose JSON or NDJSON, and leave sampling off. Databuddy keeps only requests from AI agents and search engine crawlers, from hosts that belong to your website, and stores each request once even when Vercel logs it more than once. Vercel bills drains by volume.
 
 Logs don't include the `Accept` header, so markdown is recognized from `.md` and `.mdx` paths only, and signed agent browsers look like regular Chrome. In exchange, drains also store the HTTP status each agent got, so you can ask the assistant which pages return 404 to AI crawlers.
 
@@ -148,7 +148,7 @@ It never throws and never delays your response: requests to Databuddy run in the
 - **User agents can be copied.** Anyone can send a request that claims to be GPTBot, so treat a sudden burst from one crawler with care.
 - **Requests made for a user may ignore robots.txt.** Crawlers such as GPTBot follow it; fetches a person triggers inside ChatGPT or Claude often don't.
 - **Visitors from AI depend on what the AI product passes along.** Visits count when the referrer or `utm_source` names an AI product, or the visitor uses an AI app browser. Apps that strip both show up as direct traffic.
-- **Failed requests aren't reads.** With a Vercel log drain, requests that got an error are listed separately, and neither errors nor redirects count as pages read.
+- **Failed requests aren't reads.** With a Vercel log drain, requests that got an error are listed separately, and neither errors nor redirects count as pages read. A 304 response, where a crawler checked a page it already had, does count.
 
 ## Test your setup
 
