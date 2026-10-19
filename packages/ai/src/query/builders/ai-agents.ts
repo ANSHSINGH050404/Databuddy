@@ -77,20 +77,23 @@ const SEARCH_ENGINE_ROW = `client_id = {websiteId:String}
 const IN_RANGE = `timestamp >= toDateTime({startDate:String})
 	AND timestamp <= toDateTime(concat({endDate:String}, ' 23:59:59'))`;
 
+const SERVED =
+	"(status_code = 0 OR status_code BETWEEN 200 AND 299 OR status_code = 304)";
+
 const AGENT_REQUEST = `${AGENT_ROW}
-	AND (status_code = 0 OR status_code BETWEEN 200 AND 299)`;
+	AND ${SERVED}`;
 
 const AGENT_REQUEST_IN_RANGE = `${AGENT_REQUEST} AND ${IN_RANGE}`;
 
 const SEARCH_ENGINE_REQUEST_IN_RANGE = `${SEARCH_ENGINE_ROW}
-	AND (status_code = 0 OR status_code BETWEEN 200 AND 299)
+	AND ${SERVED}
 	AND ${IN_RANGE}
 	AND (
 		source != 'tracker'
 		OR bot_name NOT IN (
 			SELECT bot_name
 			FROM ${Analytics.ai_traffic_spans}
-			WHERE ${SEARCH_ENGINE_ROW} AND source != 'tracker' AND ${IN_RANGE}
+			WHERE ${SEARCH_ENGINE_ROW} AND ${SERVED} AND source != 'tracker' AND ${IN_RANGE}
 		)
 	)`;
 

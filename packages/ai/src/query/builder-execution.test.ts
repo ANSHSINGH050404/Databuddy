@@ -896,3 +896,76 @@ describeIntegration("MCP query scope against ClickHouse", () => {
 		expect(await series(future, future)).toEqual([]);
 	});
 });
+
+const searchSiteId = `search-builder-${randomUUIDv7()}`;
+
+function searchSpan(
+	bot_name: string,
+	source: "tracker" | "vercel",
+	time: string,
+	status_code = 0
+) {
+	return {
+		bot_name,
+		bot_type: "search_engine",
+		client_id: searchSiteId,
+		path: "/pricing",
+		source,
+		status_code,
+		timestamp: `2026-08-01 ${time}`,
+	};
+}
+
+describeIntegration("search engine crawlers against ClickHouse", () => {
+	beforeAll(async () => {
+		await clickHouse.insert({
+			table: "analytics.ai_traffic_spans",
+			format: "JSONEachRow",
+			values: [
+				searchSpan("GoogleBot", "tracker", "12:00:00"),
+				searchSpan("GoogleBot", "vercel", "12:01:00", 304),
+				searchSpan("GoogleBot", "vercel", "12:02:00", 200),
+				searchSpan("bing-crawler", "tracker", "12:03:00"),
+				searchSpan("bing-crawler", "tracker", "12:04:00"),
+				searchSpan("bing-crawler", "vercel", "12:05:00", 404),
+			],
+		});
+	});
+
+	afterAll(async () => {
+		await chCommand(
+			"ALTER TABLE analytics.ai_traffic_spans DELETE WHERE client_id = {id:String} SETTINGS mutations_sync = 1",
+			{ id: searchSiteId }
+		);
+	});
+
+	it("counts revalidated server requests and keeps rendered pages when every server request failed", async () => {
+		const { sql, params } = new SimpleQueryBuilder(
+			QueryBuilders.search_engine_crawlers,
+			{
+				projectId: searchSiteId,
+				from: "2026-08-01",
+				to: "2026-08-01",
+				type: "search_engine_crawlers",
+			}
+		).compile();
+		const rows = await chQuery<{
+			name: string;
+			rendered: number | string;
+			requests: number | string;
+			server: number | string;
+		}>(sql, params);
+
+		expect(
+			rows.map((row) => [
+				row.name,
+				Number(row.requests),
+				Number(row.rendered),
+				Number(row.server),
+			])
+		).toEqual([
+			["GoogleBot", 2, 0, 2],
+			["bing-crawler", 2, 2, 0],
+		]);
+	});
+});
