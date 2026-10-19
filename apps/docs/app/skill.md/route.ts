@@ -249,7 +249,7 @@ Accepts single event or array (max 100). Max payload: 1MB (2MB request body hard
 
 ## Supported Frameworks
 
-React, Next.js, Vue, Nuxt, Svelte, SvelteKit, Angular, Shopify, WordPress, Webflow, Wix, Squarespace, Hugo, Jekyll, Framer, Bubble, Mintlify, Laravel, Google Tag Manager.
+React, Next.js, Vue, Nuxt, Svelte, SvelteKit, Angular, Shopify, WordPress, Webflow, Wix, Squarespace, Hugo, Jekyll, Framer, Bubble, Mintlify, Notra, Laravel, Google Tag Manager.
 
 Dedicated integration guides also cover Cal.com bookings and payments (Stripe and Paddle).
 `;

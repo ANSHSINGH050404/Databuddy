@@ -1,0 +1,85 @@
+---
+title: Notra
+description: Turn on Databuddy's built-in integration for your Notra site from the Notra dashboard or blog.json
+---
+
+import { Steps, Step } from "@/components/docs";
+import { Callout } from "@/components/docs";
+import { CodeBlock } from "@/components/docs";
+import { Card, Cards } from "@/components/docs";
+
+[Notra Sites](https://www.usenotra.com/docs/sites/overview) turns MDX files in your GitHub repository into a hosted blog and changelog on your own domain. It has a built-in Databuddy integration, so you don't need to add a script tag yourself. When you add your Client ID, Notra loads the tracker on every live page and adds Databuddy's script and ingestion hosts to your site's Content-Security-Policy.
+
+## How to add Databuddy to Notra
+
+<Steps>
+  <Step title="Get your Client ID">
+    Open your [Databuddy dashboard](https://app.databuddy.cc/websites), select the website that represents your Notra site and copy the **Client ID** from the tracking setup screen.
+  </Step>
+
+  <Step title="Add it in Notra">
+    In Notra, go to **Sites** in Studio, select your site, open **Integrations** and click **Add Databuddy**. Paste your Client ID into **Client ID** and switch on any of the **Web vitals**, **Errors**, **Outgoing links** and **Interactions** toggles you want.
+
+    If you manage your site from a repository, you can add the integration to `blog.json` instead:
+
+    <CodeBlock
+      language="json"
+      filename="blog.json"
+      code={`{
+  "$schema": "https://usenotra.com/schemas/blog.json",
+  "name": "Acme",
+  "integrations": {
+    "databuddy": {
+      "clientId": "YOUR_CLIENT_ID",
+      "trackWebVitals": true,
+      "trackErrors": true,
+      "trackOutgoingLinks": true
+    }
+  }
+}`}
+    />
+  </Step>
+
+  <Step title="Publish and verify">
+    Notra saves your settings as a draft of `blog.json`. Click **Review and publish**, create the pull request and merge it. Once the production deployment finishes, visit your live site and watch real-time visitors appear in your [Databuddy dashboard](https://app.databuddy.cc).
+  </Step>
+</Steps>
+
+## Configuration options
+
+You can set every tracker option in `blog.json`, including `trackAttributes`, `samplingRate`, `skipPatterns`, `maskPatterns` and a custom `scriptUrl` or `apiUrl` if you proxy Databuddy through your own domain. The [Notra Databuddy guide](https://www.usenotra.com/docs/sites/integrations/analytics/databuddy) lists every option with its default.
+
+## Custom event tracking
+
+With `trackAttributes` on, you can track clicks by adding a `data-track` attribute to links and buttons in your MDX pages. Databuddy sends the `data-track` value as the event name and the element's other `data-*` attributes as properties:
+
+<CodeBlock
+  language="html"
+  code={`<a href="/pricing" data-track="pricing_clicked" data-placement="changelog-footer">
+  See pricing
+</a>`}
+/>
+
+## Troubleshooting
+
+<Callout type="info">
+**No data showing up**
+
+1. Make sure you merged the pull request and the production deployment finished. Previews and local development don't send events, so test on the live site.
+2. Check that the domain on your Databuddy website matches your Notra site's domain.
+3. Test in an incognito window to rule out ad blockers and previous opt-outs.
+</Callout>
+
+## Related
+
+<Cards>
+  <Card title="Mintlify" href="/docs/Integrations/mintlify">
+    Set up Databuddy for Mintlify documentation sites by dropping in a databuddy.js file.
+  </Card>
+  <Card title="Framer" href="/docs/Integrations/framer">
+    No-code integration for Framer websites with visual setup guide.
+  </Card>
+  <Card title="Webflow" href="/docs/Integrations/webflow">
+    Visual builder integration for Webflow sites with custom code embedding.
+  </Card>
+</Cards>
