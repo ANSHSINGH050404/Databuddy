@@ -1407,7 +1407,9 @@ export const insightGenerationRouter = {
 					analyzedSignalCount: z.number(),
 					analyzedWebsiteCount: z.number(),
 					completedItems: z.number(),
+					createdAt: z.string(),
 					failedItems: z.number(),
+					finishedAt: z.string().nullable(),
 					id: z.string(),
 					insightCount: z.number(),
 					skippedItems: z.number(),
@@ -1421,7 +1423,9 @@ export const insightGenerationRouter = {
 			const [run] = await db
 				.select({
 					completedItems: insightRuns.completedItems,
+					createdAt: insightRuns.createdAt,
 					failedItems: insightRuns.failedItems,
+					finishedAt: insightRuns.finishedAt,
 					id: insightRuns.id,
 					skippedItems: insightRuns.skippedItems,
 					status: insightRuns.status,
@@ -1454,6 +1458,8 @@ export const insightGenerationRouter = {
 
 			return {
 				...run,
+				createdAt: run.createdAt.toISOString(),
+				finishedAt: run.finishedAt?.toISOString() ?? null,
 				analyzedSignalCount: count?.analyzedSignalCount ?? 0,
 				analyzedWebsiteCount: count?.analyzedWebsiteCount ?? 0,
 				insightCount: count?.insightCount ?? 0,

@@ -1853,6 +1853,177 @@ describe("MCP OAuth workspace writes", () => {
 	);
 });
 
+describe("insight inbox", () => {
+	iit(
+		"derives what each thread needs and marks a manual fix as done",
+		async () => {
+			const member = await signUp();
+			const organization = await insertOrganization();
+			await addToOrganization(member.id, organization.id, "member");
+			const website = await insertWebsite({ organizationId: organization.id });
+			const ids = {
+				answered: randomUUIDv7(),
+				ask: randomUUIDv7(),
+				manual: randomUUIDv7(),
+				resolved: randomUUIDv7(),
+			};
+			const at = (day: number) =>
+				new Date(`2026-01-${String(day).padStart(2, "0")}T12:00:00.000Z`);
+			await db()
+				.insert(analyticsInsights)
+				.values([
+					insightRow({
+						id: ids.ask,
+						organizationId: organization.id,
+						subjectKey: "goal:ask",
+						websiteId: website.id,
+					}),
+					insightRow({
+						id: ids.answered,
+						organizationId: organization.id,
+						subjectKey: "goal:answered",
+						websiteId: website.id,
+					}),
+					insightRow({
+						id: ids.manual,
+						organizationId: organization.id,
+						subjectKey: "goal:manual",
+						websiteId: website.id,
+					}),
+					{
+						...insightRow({
+							id: ids.resolved,
+							organizationId: organization.id,
+							subjectKey: "goal:resolved",
+							websiteId: website.id,
+						}),
+						resolvedAt: at(9),
+						resolvedReason: "recovered",
+						status: "resolved",
+					},
+				]);
+			const askOutcome: InvestigationOutcome = {
+				...investigationOutcome("act"),
+				next: { question: "Did you pause the signup campaign?", type: "ask" },
+				rootCause: null,
+			};
+			await db()
+				.insert(insightObservations)
+				.values([
+					{
+						asOf: at(5),
+						createdAt: at(5),
+						id: randomUUIDv7(),
+						insightId: ids.ask,
+						organizationId: organization.id,
+						outcome: askOutcome,
+						recheckAt: at(10),
+						signal: signal("goal:ask"),
+						signalKey: "goal:ask",
+						websiteId: website.id,
+					},
+					{
+						asOf: at(5),
+						createdAt: at(5),
+						id: randomUUIDv7(),
+						insightId: ids.answered,
+						organizationId: organization.id,
+						outcome: askOutcome,
+						recheckAt: at(10),
+						signal: signal("goal:answered"),
+						signalKey: "goal:answered",
+						websiteId: website.id,
+					},
+					{
+						asOf: at(6),
+						createdAt: at(6),
+						id: randomUUIDv7(),
+						insightId: ids.manual,
+						organizationId: organization.id,
+						outcome: investigationOutcome("act"),
+						recheckAt: at(13),
+						signal: signal("goal:manual"),
+						signalKey: "goal:manual",
+						websiteId: website.id,
+					},
+					{
+						asOf: at(7),
+						createdAt: at(7),
+						id: randomUUIDv7(),
+						insightId: ids.resolved,
+						organizationId: organization.id,
+						outcome: investigationOutcome("act"),
+						recheckAt: at(14),
+						signal: signal("goal:resolved"),
+						signalKey: "goal:resolved",
+						websiteId: website.id,
+					},
+				]);
+			await db()
+				.insert(insightReplies)
+				.values({
+					authorId: member.id,
+					authorName: "Member",
+					body: "Yes, we paused it on Monday.",
+					createdAt: at(8),
+					id: randomUUIDv7(),
+					insightId: ids.answered,
+					intent: "analysis",
+					status: "succeeded",
+				});
+
+			const context = userContext(member, organization.id);
+			const before = await call(
+				appRouter.insights.inbox,
+				context
+			)({ organizationId: organization.id });
+			const byId = new Map(before.threads.map((thread) => [thread.id, thread]));
+			expect(byId.get(ids.ask)).toMatchObject({
+				need: "answer",
+				state: "needs_you",
+			});
+			expect(byId.get(ids.answered)).toMatchObject({
+				lastActivityBy: "team",
+				need: null,
+				state: "watching",
+			});
+			expect(byId.get(ids.manual)).toMatchObject({
+				need: "done",
+				next: { executable: false, type: "act" },
+				state: "needs_you",
+			});
+			expect(byId.get(ids.resolved)).toMatchObject({
+				need: null,
+				resolvedReason: "recovered",
+				state: "resolved",
+			});
+
+			const done = await call(
+				appRouter.insights.markDone,
+				context
+			)({ insightId: ids.manual });
+			expect(done.reply).toMatchObject({
+				intent: "verification",
+				kind: "reply",
+			});
+			expect(done.reply.body).toContain(
+				"Marked as done: Restore signup_completed"
+			);
+
+			const after = await call(
+				appRouter.insights.inbox,
+				context
+			)({ organizationId: organization.id });
+			expect(
+				after.threads.find((thread) => thread.id === ids.manual)
+			).toMatchObject({ need: null, state: "watching" });
+			await expect(
+				call(appRouter.insights.markDone, context)({ insightId: ids.ask })
+			).rejects.toThrow("no open action");
+		}
+	);
+});
+
 function insightRow(input: {
 	id: string;
 	organizationId: string;

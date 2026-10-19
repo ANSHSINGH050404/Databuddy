@@ -7,7 +7,11 @@ import {
 	INVESTIGATION_USAGE,
 	SELF_HOSTED_INVESTIGATIONS_MESSAGE,
 } from "@databuddy/shared/billing";
-import { appliedInsightActionReply } from "@databuddy/shared/insights";
+import {
+	appliedInsightActionReply,
+	insightInboxThreadSchema,
+	type InsightInboxThread,
+} from "@databuddy/shared/insights";
 import {
 	and,
 	db,
@@ -444,6 +448,194 @@ function serializeInsightRecommendation(
 		evidence: outcome.evidence,
 		recommendation: outcome.recommendation,
 	};
+}
+
+const INBOX_LIMIT = 200;
+
+async function loadInsightInbox(input: {
+	organizationId: string;
+	websiteId?: string;
+}): Promise<InsightInboxThread[]> {
+	const latestCases = db
+		.selectDistinctOn(
+			[analyticsInsights.websiteId, analyticsInsights.subjectKey],
+			{
+				...insightSelection,
+				activityAt:
+					sql<Date>`coalesce(${analyticsInsights.resolvedAt}, ${analyticsInsights.createdAt})`.as(
+						"inbox_activity_at"
+					),
+			}
+		)
+		.from(analyticsInsights)
+		.innerJoin(websites, eq(analyticsInsights.websiteId, websites.id))
+		.innerJoin(
+			insightObservations,
+			and(
+				eq(
+					insightObservations.organizationId,
+					analyticsInsights.organizationId
+				),
+				eq(insightObservations.insightId, analyticsInsights.id),
+				eq(insightObservations.websiteId, analyticsInsights.websiteId),
+				eq(insightObservations.signalKey, analyticsInsights.subjectKey),
+				sql`(${insightObservations.outcome}->'next'->>'type' in ('act', 'ask') OR ${insightObservations.snapshot}->>'completion' = 'complete')`
+			)
+		)
+		.where(
+			and(
+				eq(analyticsInsights.organizationId, input.organizationId),
+				input.websiteId
+					? eq(analyticsInsights.websiteId, input.websiteId)
+					: undefined,
+				isNull(websites.deletedAt)
+			)
+		)
+		.orderBy(
+			analyticsInsights.websiteId,
+			analyticsInsights.subjectKey,
+			desc(analyticsInsights.createdAt),
+			desc(analyticsInsights.id)
+		)
+		.as("inbox_cases");
+	const cases = await db
+		.select()
+		.from(latestCases)
+		.orderBy(desc(latestCases.activityAt), desc(latestCases.id))
+		.limit(INBOX_LIMIT);
+	if (cases.length === 0) {
+		return [];
+	}
+	const ids = cases.map((row) => row.id);
+	const [observations, replies] = await Promise.all([
+		db
+			.selectDistinctOn([insightObservations.insightId], {
+				createdAt: insightObservations.createdAt,
+				id: insightObservations.id,
+				insightId: insightObservations.insightId,
+				outcome: insightObservations.outcome,
+				signal: insightObservations.signal,
+			})
+			.from(insightObservations)
+			.where(inArray(insightObservations.insightId, ids))
+			.orderBy(
+				insightObservations.insightId,
+				desc(insightObservations.createdAt),
+				desc(insightObservations.id)
+			),
+		db
+			.select({
+				authorId: insightReplies.authorId,
+				createdAt: insightReplies.createdAt,
+				insightId: insightReplies.insightId,
+				intent: insightReplies.intent,
+				status: insightReplies.status,
+			})
+			.from(insightReplies)
+			.where(inArray(insightReplies.insightId, ids))
+			.orderBy(desc(insightReplies.createdAt)),
+	]);
+	const latestByInsight = new Map(
+		observations.map((row) => [row.insightId, row])
+	);
+	const repliesByInsight = new Map<string, typeof replies>();
+	for (const reply of replies) {
+		const list = repliesByInsight.get(reply.insightId);
+		if (list) {
+			list.push(reply);
+		} else {
+			repliesByInsight.set(reply.insightId, [reply]);
+		}
+	}
+	const threads: InsightInboxThread[] = [];
+	for (const row of cases) {
+		const latest = latestByInsight.get(row.id);
+		const outcome = latest ? parseInvestigationOutcome(latest.outcome) : null;
+		const signal = latest ? parseInvestigationSignal(latest.signal) : null;
+		if (!(latest && outcome && signal)) {
+			continue;
+		}
+		const caseReplies = repliesByInsight.get(row.id) ?? [];
+		const newest = caseReplies[0];
+		const after = caseReplies.filter(
+			(reply) => reply.createdAt >= latest.createdAt
+		);
+		const answered = after.some(
+			(reply) => reply.authorId && reply.intent !== "verification"
+		);
+		const verifying = after.some((reply) => reply.intent === "verification");
+		const pendingReply =
+			newest &&
+			(newest.status === "queued" ||
+				newest.status === "running" ||
+				newest.status === "failed")
+				? { status: newest.status }
+				: null;
+		const inFlight =
+			pendingReply?.status === "queued" || pendingReply?.status === "running";
+		const executable =
+			outcome.next.type === "act" &&
+			Boolean(outcome.next.execution) &&
+			(signal.entity.type === "goal" || signal.entity.type === "funnel");
+		const verificationStatus =
+			outcome.verification?.status === "passed" ||
+			outcome.verification?.status === "failed" ||
+			outcome.verification?.status === "inconclusive"
+				? outcome.verification.status
+				: null;
+		let need: InsightInboxThread["need"] = null;
+		if (row.status === "open" && !inFlight) {
+			if (verificationStatus === "failed") {
+				need = "look";
+			} else if (outcome.next.type === "ask" && !answered) {
+				need = "answer";
+			} else if (outcome.next.type === "act" && !verifying) {
+				need = executable ? "apply" : "done";
+			}
+		}
+		const lastReplyAt = newest?.createdAt ?? null;
+		const teamLast = Boolean(
+			newest && newest.authorId && newest.createdAt > latest.createdAt
+		);
+		threads.push({
+			entity: signal.entity,
+			id: row.id,
+			lastActivityAt: (lastReplyAt && lastReplyAt > latest.createdAt
+				? lastReplyAt
+				: latest.createdAt
+			).toISOString(),
+			lastActivityBy: teamLast ? "team" : "databuddy",
+			latestObservationId: latest.id,
+			need,
+			next: {
+				executable,
+				recheckAt:
+					(outcome.next.type === "act" || outcome.next.type === "watch") &&
+					outcome.next.recheckAt
+						? outcome.next.recheckAt
+						: null,
+				text: formatInvestigationNext(outcome, signal),
+				type: outcome.next.type,
+				verificationStatus,
+			},
+			pendingReply,
+			resolvedReason: row.resolvedReason ?? null,
+			severity: row.severity,
+			state:
+				row.status === "resolved"
+					? "resolved"
+					: need
+						? "needs_you"
+						: "watching",
+			status: row.status,
+			summary: outcome.summary,
+			title: row.title,
+			websiteDomain: row.websiteDomain,
+			websiteId: row.websiteId,
+			websiteName: row.websiteName,
+		});
+	}
+	return threads;
 }
 
 async function authorizeInsightsRead(
@@ -1524,6 +1716,97 @@ export const insightsRouter = {
 			return {
 				hasMore: rows.length > input.limit,
 				insights: page,
+			};
+		}),
+
+	inbox: protectedProcedure
+		.route({
+			method: "POST",
+			path: "/insights/inbox",
+			tags: ["Insights"],
+			summary:
+				"List investigation threads with what each one needs from the team",
+		})
+		.input(
+			z.object({
+				organizationId: z.string().min(1),
+				websiteId: z.string().min(1).optional(),
+			})
+		)
+		.output(z.object({ threads: z.array(insightInboxThreadSchema) }))
+		.handler(async ({ context, input }) => {
+			await authorizeInsightsRead(context, input);
+			return { threads: await loadInsightInbox(input) };
+		}),
+
+	markDone: auditedProcedure
+		.route({
+			method: "POST",
+			path: "/insights/actions/done",
+			tags: ["Insights"],
+			summary:
+				"Record that the team made the recommended change and start verifying it",
+		})
+		.input(z.object({ insightId: z.string().min(1) }))
+		.output(z.object({ reply: insightTimelineReplySchema }))
+		.handler(async ({ context, input }) => {
+			const [insight] = await selectInsights()
+				.where(eq(analyticsInsights.id, input.insightId))
+				.limit(1);
+			if (!insight) {
+				throw rpcError.notFound("Investigation not found");
+			}
+			await withWorkspace(context, {
+				allowCrossOrg: true,
+				organizationId: insight.organizationId,
+				permissions: ["update"],
+				websiteId: insight.websiteId,
+			});
+			setAuditOrganization(context, insight.organizationId);
+			requireHostedInvestigations();
+			const [latest] = await db
+				.select({
+					id: insightObservations.id,
+					outcome: insightObservations.outcome,
+				})
+				.from(insightObservations)
+				.where(eq(insightObservations.insightId, insight.id))
+				.orderBy(
+					desc(insightObservations.createdAt),
+					desc(insightObservations.id)
+				)
+				.limit(1);
+			const outcome = latest ? parseInvestigationOutcome(latest.outcome) : null;
+			if (!(latest && outcome && outcome.next.type === "act")) {
+				throw rpcError.badRequest(
+					"This investigation has no open action to mark as done."
+				);
+			}
+			const author = replyAuthor(context);
+			const createdAt = new Date();
+			const id = randomUUIDv7();
+			const body = `Marked as done: ${outcome.next.action}`;
+			await db.insert(insightReplies).values({
+				...author,
+				body,
+				createdAt,
+				id,
+				insightId: insight.id,
+				intent: "verification",
+				sourceObservationId: latest.id,
+				status: "queued",
+			});
+			const status = await queueInsightReply(id);
+			return {
+				reply: {
+					author: author.authorName,
+					body,
+					createdAt: createdAt.toISOString(),
+					id,
+					intent: "verification" as const,
+					kind: "reply" as const,
+					status,
+				},
 			};
 		}),
 
