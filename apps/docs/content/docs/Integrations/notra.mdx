@@ -8,7 +8,9 @@ import { Callout } from "@/components/docs";
 import { CodeBlock } from "@/components/docs";
 import { Card, Cards } from "@/components/docs";
 
-[Notra Sites](https://www.usenotra.com/docs/sites/overview) turns MDX files in your GitHub repository into a hosted blog and changelog on your own domain. It has a built-in Databuddy integration, so you don't need to add a script tag yourself. When you add your Client ID, Notra loads the tracker on every live page and adds Databuddy's script and ingestion hosts to your site's Content-Security-Policy.
+[Notra](https://www.usenotra.com) is a generative engine optimization (GEO) tool that asks ChatGPT, Claude and Gemini the questions your buyers ask. It shows whether you appear, who appears instead and how to fix it.
+
+[Notra Sites](https://www.usenotra.com/docs/sites/overview) turns MDX files in your GitHub repository into a hosted blog and changelog on your own domain. It has a built-in Databuddy integration, so you don't need to add a script tag yourself.
 
 ## How to add Databuddy to Notra
 
@@ -48,6 +50,8 @@ import { Card, Cards } from "@/components/docs";
 ## Configuration options
 
 You can set every tracker option in `blog.json`, including `trackAttributes`, `samplingRate`, `skipPatterns`, `maskPatterns` and a custom `scriptUrl` or `apiUrl` if you proxy Databuddy through your own domain. The [Notra Databuddy guide](https://www.usenotra.com/docs/sites/integrations/analytics/databuddy) lists every option with its default.
+
+Notra loads the tracker on every live page and adds Databuddy's script and ingestion hosts to your site's Content-Security-Policy, including any custom `scriptUrl` or `apiUrl`, so a proxied setup needs no extra configuration.
 
 ## Custom event tracking
 
