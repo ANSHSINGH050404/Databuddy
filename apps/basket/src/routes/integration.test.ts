@@ -24,7 +24,9 @@ const {
 	mockGetWebsiteByIdV2,
 	mockResolveApiKeyOwnerId,
 	mockDenyApiKeyWebsiteAccess,
+	mockRedisDel,
 	mockRedisExists,
+	mockRedisGet,
 	mockRedisSet,
 	apiKeyDenialErrors,
 } = vi.hoisted(() => {
@@ -47,7 +49,12 @@ const {
 	return {
 		mockDenyApiKeyWebsiteAccess: vi.fn((): string | null => null),
 		mockRedisExists: vi.fn((_key: string) => Promise.resolve(0)),
-		mockRedisSet: vi.fn(() => Promise.resolve("OK")),
+		mockRedisSet: vi.fn(
+			(_key: string, _value: string, ..._options: unknown[]) =>
+				Promise.resolve<string | null>("OK")
+		),
+		mockRedisGet: vi.fn((_key: string) => Promise.resolve<string | null>(null)),
+		mockRedisDel: vi.fn((..._keys: string[]) => Promise.resolve(0)),
 		apiKeyDenialErrors: {} as Record<string, () => Error>,
 		noop,
 		noopAsync,
@@ -180,7 +187,12 @@ vi.mock("@lib/api-key", () => ({
 }));
 
 vi.mock("@databuddy/redis/redis", () => ({
-	redis: { exists: mockRedisExists, set: mockRedisSet },
+	redis: {
+		del: mockRedisDel,
+		exists: mockRedisExists,
+		get: mockRedisGet,
+		set: mockRedisSet,
+	},
 }));
 
 vi.mock("@hooks/auth", () => ({
@@ -201,9 +213,11 @@ const { basketErrors, buildBasketErrorPayload } = await import(
 	"@lib/structured-errors"
 );
 const { ERRORS_BODY_MAX_BYTES } = await import("../routes/basket");
-const { send: mockSend, sendBatch: mockSendBatch } = await import(
-	"@lib/producer"
-);
+const {
+	runPromise: mockRunPromise,
+	send: mockSend,
+	sendBatch: mockSendBatch,
+} = await import("@lib/producer");
 const { isOriginAllowed } = await import("@hooks/auth");
 const realApiKey =
 	await vi.importActual<typeof import("@lib/api-key")>("@lib/api-key");
@@ -1930,6 +1944,9 @@ describe("POST /vercel/:websiteId", () => {
 
 	afterEach(() => {
 		vi.mocked(isOriginAllowed).mockImplementation(() => true);
+		vi.mocked(mockRedisSet).mockImplementation(() => Promise.resolve("OK"));
+		vi.mocked(mockRedisGet).mockImplementation(() => Promise.resolve(null));
+		vi.mocked(mockRedisDel).mockImplementation(() => Promise.resolve(0));
 	});
 
 	function logLine(
@@ -2029,15 +2046,35 @@ describe("POST /vercel/:websiteId", () => {
 		]);
 	});
 
-	test("skips a request Vercel delivers again in a later batch, and stores it when Redis is down", async () => {
-		const claimedKeys = new Set<string>();
-		vi.mocked(mockRedisSet).mockImplementation((key: string) => {
-			if (claimedKeys.has(key)) {
+	function fakeRedis() {
+		const store = new Map<string, string>();
+		vi.mocked(mockRedisSet).mockImplementation((key, value, ...options) => {
+			if (
+				(options.includes("NX") && store.has(key)) ||
+				(options.includes("XX") && !store.has(key))
+			) {
 				return Promise.resolve(null);
 			}
-			claimedKeys.add(key);
+			store.set(key, value);
 			return Promise.resolve("OK");
 		});
+		vi.mocked(mockRedisGet).mockImplementation((key) =>
+			Promise.resolve(store.get(key) ?? null)
+		);
+		vi.mocked(mockRedisDel).mockImplementation((...keys) => {
+			for (const key of keys) {
+				store.delete(key);
+			}
+			return Promise.resolve(keys.length);
+		});
+	}
+
+	function spansFromCall(call: number) {
+		return vi.mocked(mockSendBatch).mock.calls[call]?.[1] ?? [];
+	}
+
+	test("skips a request Vercel delivers again in a later batch, and stores it when Redis is down", async () => {
+		fakeRedis();
 		const body = JSON.stringify([logLine(CLAUDE_CODE), logLine(GOOGLEBOT)]);
 		expect((await drain(body)).status).toBe(200);
 		expect((await drain(body)).status).toBe(200);
@@ -2050,7 +2087,34 @@ describe("POST /vercel/:websiteId", () => {
 		);
 		expect((await drain(body)).status).toBe(200);
 		expect(storedSpans()).toHaveLength(2);
-		vi.mocked(mockRedisSet).mockImplementation(() => Promise.resolve("OK"));
+	});
+
+	test("stores a failure status that arrives in a later batch than the request's first log", async () => {
+		fakeRedis();
+		const middleware = logLine(CLAUDE_CODE, { statusCode: undefined });
+		const notFound = logLine(CLAUDE_CODE, { statusCode: 404 });
+		const served = logLine(CLAUDE_CODE, { statusCode: 200 });
+		for (const line of [middleware, notFound, served]) {
+			expect((await drain(JSON.stringify([line]))).status).toBe(200);
+		}
+		expect(mockSendBatch).toHaveBeenCalledTimes(2);
+		expect(spansFromCall(0)).toEqual([
+			expect.objectContaining({ status_code: 0 }),
+		]);
+		expect(spansFromCall(1)).toEqual([
+			expect.objectContaining({ status_code: 404 }),
+		]);
+	});
+
+	test("fails and releases its claims when the rows cannot be delivered, so Vercel's retry is stored", async () => {
+		fakeRedis();
+		vi.mocked(mockRunPromise).mockRejectedValueOnce(new Error("broker down"));
+		const body = JSON.stringify([logLine(CLAUDE_CODE)]);
+		expect((await drain(body)).status).toBe(500);
+		expect((await drain(body)).status).toBe(200);
+		expect(spansFromCall(1)).toEqual([
+			expect.objectContaining({ agent_id: "claude-code" }),
+		]);
 	});
 
 	test("skips other hosts, writes, revalidations and setup checks", async () => {
