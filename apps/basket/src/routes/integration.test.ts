@@ -1916,6 +1916,9 @@ describe("POST /vercel/:websiteId", () => {
 	const CHROME_UA =
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
+	const GOOGLEBOT =
+		"Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
 	beforeEach(() => {
 		vi.mocked(mockSendBatch).mockClear();
 		vi.mocked(mockRedisSet).mockClear();
@@ -1961,12 +1964,13 @@ describe("POST /vercel/:websiteId", () => {
 		return vi.mocked(mockSendBatch).mock.calls[0]?.[1] ?? [];
 	}
 
-	test("stores AI agent requests from a JSON batch with their status and format", async () => {
+	test("stores AI agent and search engine requests from a JSON batch with their status and format", async () => {
 		const res = await drain(
 			JSON.stringify([
 				logLine(CLAUDE_CODE),
 				logLine(GPTBOT, { path: "/llms.txt", statusCode: 404 }),
 				logLine(CHROME_UA),
+				logLine(GOOGLEBOT, { path: "/pricing" }),
 			])
 		);
 		expect(res.status).toBe(200);
@@ -1986,6 +1990,12 @@ describe("POST /vercel/:websiteId", () => {
 				format: "llms",
 				status_code: 404,
 			}),
+			expect.objectContaining({
+				agent_id: "",
+				bot_type: "search_engine",
+				path: "/pricing",
+				source: "vercel",
+			}),
 		]);
 	});
 
@@ -2000,13 +2010,47 @@ describe("POST /vercel/:websiteId", () => {
 			request,
 			consoleLine,
 			logLine(GPTBOT, {}, ""),
-			logLine(GPTBOT, {}, ""),
+			logLine(GPTBOT, { timestamp: 1_790_700_000_900 }, ""),
 		]
 			.map((line) => JSON.stringify(line))
 			.join("\n");
 		const res = await drain(gzipSync(ndjson));
 		expect(res.status).toBe(200);
 		expect(storedSpans()).toHaveLength(3);
+	});
+
+	test("stores one row for a request logged by middleware and its function, keeping the status", async () => {
+		const middleware = logLine(CLAUDE_CODE, { statusCode: undefined });
+		const fn = { ...logLine(CLAUDE_CODE), source: "lambda" };
+		const res = await drain(JSON.stringify([middleware, fn]));
+		expect(res.status).toBe(200);
+		expect(storedSpans()).toEqual([
+			expect.objectContaining({ agent_id: "claude-code", status_code: 200 }),
+		]);
+	});
+
+	test("skips a request Vercel delivers again in a later batch, and stores it when Redis is down", async () => {
+		const claimedKeys = new Set<string>();
+		vi.mocked(mockRedisSet).mockImplementation((key: string) => {
+			if (claimedKeys.has(key)) {
+				return Promise.resolve(null);
+			}
+			claimedKeys.add(key);
+			return Promise.resolve("OK");
+		});
+		const body = JSON.stringify([logLine(CLAUDE_CODE), logLine(GOOGLEBOT)]);
+		expect((await drain(body)).status).toBe(200);
+		expect((await drain(body)).status).toBe(200);
+		expect(mockSendBatch).toHaveBeenCalledTimes(1);
+		expect(storedSpans()).toHaveLength(2);
+
+		vi.mocked(mockSendBatch).mockClear();
+		vi.mocked(mockRedisSet).mockImplementation(() =>
+			Promise.reject(new Error("connection refused"))
+		);
+		expect((await drain(body)).status).toBe(200);
+		expect(storedSpans()).toHaveLength(2);
+		vi.mocked(mockRedisSet).mockImplementation(() => Promise.resolve("OK"));
 	});
 
 	test("skips other hosts, writes, revalidations and setup checks", async () => {

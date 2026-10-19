@@ -25,6 +25,7 @@ import {
 	setupCheckNonce,
 } from "@databuddy/shared/bot-detection/ai-agents";
 import {
+	BotCategory,
 	CONTENT_FORMATS,
 	contentFormat,
 	isAssetPath,
@@ -52,6 +53,7 @@ import {
 	VALIDATION_LIMITS,
 	validatePayloadSize,
 } from "@utils/validation";
+import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { Elysia } from "elysia";
 import { useLogger } from "evlog/elysia";
@@ -89,6 +91,7 @@ const vercelLogSchema = z.object({
 });
 
 const VERCEL_LOGS_MAX_BYTES = 10 * 1024 * 1024;
+const VERCEL_REQUEST_TTL_SECONDS = 6 * 3600 + 300;
 
 const uint32 = z.number().int().min(0).max(4_294_967_295);
 
@@ -271,6 +274,30 @@ function parseVercelLogs(body: Uint8Array): {
 		}
 	});
 	return { entries, malformed };
+}
+
+async function claimVercelRequests(
+	websiteId: string,
+	keys: string[]
+): Promise<boolean[]> {
+	return await Promise.all(
+		keys.map((key) =>
+			key === ""
+				? true
+				: redis
+						.set(
+							`vercel-drain-request:${websiteId}:${createHash("sha256").update(key).digest("base64url")}`,
+							"1",
+							"EX",
+							VERCEL_REQUEST_TTL_SECONDS,
+							"NX"
+						)
+						.then(
+							(claimed) => claimed === "OK",
+							() => true
+						)
+		)
+	);
 }
 
 async function loadHostCheck(websiteId: string) {
@@ -813,8 +840,9 @@ export const vercelDrainRoute = new Elysia().post(
 			}
 
 			const now = Date.now();
-			const seenRequests = new Set<string>();
+			const seenRequests = new Map<string, AiTrafficSpansInsert | null>();
 			const spans: AiTrafficSpansInsert[] = [];
+			const spanKeys: string[] = [];
 			let foreignHosts = 0;
 			for (const entry of batch.entries) {
 				const parsed = vercelLogSchema.safeParse(entry);
@@ -822,21 +850,28 @@ export const vercelDrainRoute = new Elysia().post(
 					continue;
 				}
 				const { id, proxy, requestId, timestamp } = parsed.data;
-				const requestKey = requestId || id;
-				if (
-					proxy.statusCode === -1 ||
-					(requestKey && seenRequests.has(requestKey))
-				) {
+				const userAgent = proxy.userAgent?.[0] ?? "";
+				const requestKey =
+					proxy.timestamp === undefined
+						? requestId || id
+						: `${proxy.timestamp} ${proxy.method} ${proxy.host} ${proxy.path} ${userAgent}`;
+				if (proxy.statusCode === -1) {
+					continue;
+				}
+				if (requestKey && seenRequests.has(requestKey)) {
+					const stored = seenRequests.get(requestKey);
+					if (stored?.status_code === 0) {
+						stored.status_code = Math.max(proxy.statusCode ?? 0, 0);
+					}
 					continue;
 				}
 				if (requestKey) {
-					seenRequests.add(requestKey);
+					seenRequests.set(requestKey, null);
 				}
 				if (!hostCheck.isHostAllowed(proxy.host)) {
 					foreignHosts += 1;
 					continue;
 				}
-				const userAgent = proxy.userAgent?.[0] ?? "";
 				const pathname = proxy.path.split("?")[0] ?? "";
 				if (
 					(await recordedSetupCheck(websiteId, userAgent)) ||
@@ -845,10 +880,13 @@ export const vercelDrainRoute = new Elysia().post(
 					continue;
 				}
 				const columns = agentSpanColumns({ userAgent });
-				if (!columns.agent_id) {
+				if (
+					!columns.agent_id &&
+					columns.bot_type !== BotCategory.SEARCH_ENGINE
+				) {
 					continue;
 				}
-				spans.push({
+				const span: AiTrafficSpansInsert = {
 					...columns,
 					client_id: websiteId,
 					timestamp: recentTimestamp(proxy.timestamp ?? timestamp, now),
@@ -861,16 +899,24 @@ export const vercelDrainRoute = new Elysia().post(
 					source: "vercel",
 					status_code: Math.max(proxy.statusCode ?? 0, 0),
 					verification: hostCheck.verification,
-				});
+				};
+				if (requestKey) {
+					seenRequests.set(requestKey, span);
+				}
+				spans.push(span);
+				spanKeys.push(requestKey ?? "");
 			}
 
-			if (spans.length > 0) {
-				runFork(sendBatch("analytics-ai-traffic-spans", spans));
+			const claimed = await claimVercelRequests(websiteId, spanKeys);
+			const fresh = spans.filter((_, index) => claimed[index]);
+			if (fresh.length > 0) {
+				runFork(sendBatch("analytics-ai-traffic-spans", fresh));
 			}
 			log.set({
 				vercel: {
 					entries: batch.entries.length,
-					stored: spans.length,
+					stored: fresh.length,
+					redelivered: spans.length - fresh.length,
 					malformed_lines: batch.malformed,
 					foreign_hosts: foreignHosts,
 				},
