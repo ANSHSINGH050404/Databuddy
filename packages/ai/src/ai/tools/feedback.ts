@@ -10,7 +10,7 @@ const logger = createToolLogger("Feedback Tools");
 const RATE_LIMIT_ATTEMPTS = 5;
 const RATE_LIMIT_WINDOW_SECONDS = 3600;
 
-const feedbackCategorySchema = z.enum([
+export const feedbackCategorySchema = z.enum([
 	"bug_report",
 	"feature_request",
 	"ux_improvement",

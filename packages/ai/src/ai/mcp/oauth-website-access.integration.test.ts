@@ -2,11 +2,14 @@ import "@databuddy/db/test-env";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
+delete process.env.SLACK_WEBHOOK_URL;
+
 const integration =
 	process.env.MCP_OAUTH_INTEGRATION_TESTS === "true" ? describe : describe.skip;
 
 integration("MCP OAuth website authorization", () => {
 	let toolContext: typeof import("./tool-context");
+	let mcpTools: typeof import("./tools");
 	let dbModule: typeof import("@databuddy/db");
 	let schema: typeof import("@databuddy/db/schema");
 	let viewer: typeof schema.user.$inferSelect;
@@ -46,6 +49,7 @@ integration("MCP OAuth website authorization", () => {
 		dbModule = await import("@databuddy/db");
 		schema = await import("@databuddy/db/schema");
 		toolContext = await import("./tool-context");
+		mcpTools = await import("./tools");
 
 		const now = new Date();
 		await dbModule.db.insert(schema.organization).values([
@@ -101,6 +105,9 @@ integration("MCP OAuth website authorization", () => {
 
 	afterAll(async () => {
 		const { db, inArray } = dbModule;
+		await db
+			.delete(schema.feedback)
+			.where(inArray(schema.feedback.userId, userIds));
 		await db
 			.delete(schema.websites)
 			.where(inArray(schema.websites.id, [websiteId, otherWebsiteId]));
@@ -205,5 +212,57 @@ integration("MCP OAuth website authorization", () => {
 				userId: null,
 			})
 		).rejects.toBeInstanceOf(Error);
+	});
+
+	test("files MCP feedback under the selected website's organization", async () => {
+		const submitAs = (user: typeof viewer) => {
+			const tool = mcpTools
+				.createMcpTools({
+					apiKey: null,
+					oauth: {
+						grant: { organizationId, websiteIds: [websiteId] },
+						scopes: ["read:data"],
+						user,
+					},
+					requestHeaders: new Headers(),
+					userId: null,
+				})
+				.find(({ name }) => name === "submit_feedback");
+			if (!tool) {
+				throw new Error("submit_feedback is not registered");
+			}
+			return tool.handler({
+				websiteId,
+				title: "Export button does nothing",
+				description: "Clicking export on the events page shows no file.",
+				category: "bug_report",
+				errorDetails: "TypeError: blob is undefined",
+			});
+		};
+
+		const sent = await submitAs(viewer);
+		expect(sent.isError).toBe(false);
+		const feedbackId = sent.structuredContent?.feedbackId;
+		expect(typeof feedbackId).toBe("string");
+		const [row] = await dbModule.db
+			.select()
+			.from(schema.feedback)
+			.where(dbModule.eq(schema.feedback.id, String(feedbackId)));
+		expect(row).toMatchObject({
+			userId: viewerId,
+			organizationId,
+			websiteId,
+			source: "mcp",
+			category: "bug_report",
+			metadata: { errorDetails: "TypeError: blob is undefined" },
+		});
+
+		const denied = await submitAs(outsider);
+		expect(denied.isError).toBe(true);
+		const outsiderRows = await dbModule.db
+			.select({ id: schema.feedback.id })
+			.from(schema.feedback)
+			.where(dbModule.eq(schema.feedback.userId, outsiderId));
+		expect(outsiderRows).toEqual([]);
 	});
 });

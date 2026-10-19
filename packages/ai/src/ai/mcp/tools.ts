@@ -12,6 +12,7 @@ import {
 	annotationCoordinateSchema,
 } from "@databuddy/validation";
 import { flagFormShape, userRuleSchema } from "@databuddy/shared/flags";
+import { submitFeedback } from "@databuddy/services/feedback";
 import { DatePresetSchema } from "../../lib/date-presets";
 import { executeBatch } from "../../query";
 import type { AppContext } from "../config/context";
@@ -22,6 +23,7 @@ import {
 	planUserTargeting,
 	userTargetingFields,
 } from "../tools/flags";
+import { feedbackCategorySchema } from "../tools/feedback";
 import { funnelFields } from "../tools/funnels";
 import { goalFields } from "../tools/goals";
 import { runInvestigationAction } from "../tools/investigations";
@@ -1699,6 +1701,76 @@ const addUsersToFlagTool = defineMcpTool(
 	}
 );
 
+const submitFeedbackTool = defineMcpTool(
+	{
+		name: "submit_feedback",
+		description:
+			"Send a bug report, feature request, or blocking error about Databuddy itself to the Databuddy team. Call only after the user asks or agrees to send it. Problems on the user's own website are analytics questions.",
+		inputSchema: z.object({
+			...WebsiteSelectorSchema,
+			title: z.string().trim().min(3).max(200).describe("Short summary."),
+			description: z
+				.string()
+				.trim()
+				.min(10)
+				.max(5000)
+				.describe(
+					"The user's words plus context: the page or feature, what they expected, and what happened."
+				),
+			category: feedbackCategorySchema.describe(
+				"bug_report, feature_request, ux_improvement, performance, documentation, or other."
+			),
+			errorDetails: z
+				.string()
+				.max(2000)
+				.optional()
+				.describe("Exact error text, if any."),
+		}),
+		outputSchema: z.object({
+			success: z.literal(true),
+			message: z.string(),
+			feedbackId: z.string(),
+		}),
+		resolveWebsite: "optional",
+		metadata: { access: { kind: "write" } },
+		annotations: CREATE_WRITE,
+		ratelimit: { limit: 5, windowSec: 3600 },
+	},
+	async (input, ctx) => {
+		const userId = ctx.oauth?.user.id ?? ctx.userId ?? ctx.apiKey?.userId;
+		const organizationId =
+			ctx.websiteOrganizationId ??
+			ctx.oauth?.grant.organizationId ??
+			ctx.apiKey?.organizationId ??
+			ctx.organizationId;
+		if (!(userId && organizationId)) {
+			throw new McpToolError(
+				"unauthorized",
+				"Feedback needs a user and an organization. API keys without an owner cannot send feedback."
+			);
+		}
+
+		const row = await submitFeedback({
+			userId,
+			organizationId,
+			title: input.title,
+			description: input.description,
+			category: input.category,
+			source: "mcp",
+			websiteId: ctx.websiteId ?? null,
+			websiteDomain: ctx.websiteDomain ?? null,
+			metadata: input.errorDetails
+				? { errorDetails: input.errorDetails }
+				: null,
+		});
+		return {
+			success: true,
+			message: "Feedback sent to the Databuddy team.",
+			feedbackId: row.id,
+		};
+	}
+);
+
 const TOOL_FACTORIES = [
 	...createMcpWorkspaceTools(),
 	listWebsitesTool,
@@ -1725,6 +1797,7 @@ const TOOL_FACTORIES = [
 	createFlagTool,
 	updateFlagTool,
 	addUsersToFlagTool,
+	submitFeedbackTool,
 ] satisfies McpToolFactory[];
 
 export function createMcpTools(ctx: McpRequestContext): RegisteredMcpTool[] {
