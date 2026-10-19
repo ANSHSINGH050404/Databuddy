@@ -505,7 +505,9 @@ function OnboardingFlow() {
 			intent: primary?.intent,
 		});
 		if (verifiedWebsiteId && canReview) {
-			leave(`/insights?firstReview=${encodeURIComponent(verifiedWebsiteId)}`);
+			leave(
+				`/insights/first-review?website=${encodeURIComponent(verifiedWebsiteId)}`
+			);
 			return;
 		}
 		leave(`/websites/${websiteId}${primary?.path ?? ""}`);

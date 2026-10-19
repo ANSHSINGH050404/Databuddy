@@ -65,16 +65,22 @@ export const mainNavigation: NavigationGroup[] = [
 				activeMatch: "prefix",
 				searchItems: [
 					{
-						name: "Investigations",
-						href: "/insights/investigations",
+						name: "Needs you",
+						href: "/insights",
 						icon: LightbulbIcon,
-						searchTags: ["cases", "open work"],
+						searchTags: ["inbox", "questions", "fixes", "suggestions"],
 					},
 					{
-						name: "Recommendations",
-						href: "/insights/recommendations",
+						name: "Watching",
+						href: "/insights/watching",
 						icon: LightbulbIcon,
-						searchTags: ["suggestions", "improvements", "setup"],
+						searchTags: ["investigations", "cases", "open work"],
+					},
+					{
+						name: "Done",
+						href: "/insights/resolved",
+						icon: LightbulbIcon,
+						searchTags: ["resolved", "verified", "recovered"],
 					},
 				],
 			}),

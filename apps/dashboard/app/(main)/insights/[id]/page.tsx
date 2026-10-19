@@ -7,14 +7,18 @@ import { INVESTIGATION_USAGE } from "@databuddy/shared/billing";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 import { showErrorToast } from "@/lib/user-facing-error";
-import { TopBar } from "@/components/layout/top-bar";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { MessageResponse } from "@/components/ai-elements/message";
-import { insightQueries, type InsightByIdResponse } from "@/lib/insight-api";
+import {
+	type InboxThread,
+	insightQueries,
+	type InsightByIdResponse,
+} from "@/lib/insight-api";
 import { orpc } from "@/lib/orpc";
+import { cn } from "@/lib/utils";
 import {
 	ArrowLeftIcon,
 	ArrowSquareOutIcon,
@@ -24,7 +28,6 @@ import {
 	LightbulbIcon,
 	LinkBreakIcon,
 	LinkIcon,
-	PaperPlaneIcon,
 	RobotIcon,
 	ShareNetworkIcon,
 	UserIcon,
@@ -33,7 +36,6 @@ import { DropdownMenu } from "@databuddy/ui/client";
 import {
 	Button,
 	buttonVariants,
-	Card,
 	EmptyState,
 	Field,
 	formatDateTime,
@@ -44,18 +46,29 @@ import {
 	Textarea,
 } from "@databuddy/ui";
 import {
-	CaseState,
-	InvestigationActivity,
+	MarkDoneButton,
+	NEED_CONFIG,
+	sectionHref,
+	threadStatus,
+	useInbox,
+} from "../_components/inbox-state";
+import {
+	ExecuteDefinitionAction,
+	FindingBody,
+	formatPeriod,
+	investigationSourceLink,
+	nextCopy,
 } from "../_components/investigation-row";
 
 type TimelineItem = InsightByIdResponse["timeline"][number];
 type InvestigationItem = Extract<TimelineItem, { kind: "investigation" }>;
+type ReplyItem = Extract<TimelineItem, { kind: "reply" }>;
 
 export default function InsightDetailPage() {
 	const params = useParams();
 	const router = useRouter();
 	const insightId = typeof params.id === "string" ? params.id : "";
-	const [replyOpen, setReplyOpen] = useState(false);
+	const composerRef = useRef<HTMLTextAreaElement>(null);
 
 	const { data, isLoading, isError } = useQuery({
 		...insightQueries.byId(insightId || undefined),
@@ -72,106 +85,575 @@ export default function InsightDetailPage() {
 					? 30_000
 					: false,
 	});
+	const inbox = useInbox();
+	const thread =
+		inbox.data?.threads.find((candidate) => candidate.id === insightId) ?? null;
 
 	const insight = data?.insight ?? null;
-	const latest = data?.timeline.findLast(
-		(item): item is InvestigationItem => item.kind === "investigation"
+	const items = data?.timeline ?? [];
+	const latestIndex = items.findLastIndex(
+		(item) => item.kind === "investigation"
+	);
+	const latest =
+		latestIndex >= 0 ? (items[latestIndex] as InvestigationItem) : null;
+	const earlier = latestIndex > 0 ? items.slice(0, latestIndex) : [];
+	const since = latestIndex >= 0 ? items.slice(latestIndex + 1) : items;
+	const replies = since.filter(
+		(item): item is ReplyItem => item.kind === "reply"
 	);
 	const recovered = insight?.resolvedReason === "recovered";
+	const resolved = insight?.status === "resolved";
+	const backHref = sectionHref(thread?.state ?? "needs_you");
+	const sourceLink =
+		latest && insight
+			? investigationSourceLink(latest, insight.websiteId)
+			: null;
+	const focusComposer = () => {
+		composerRef.current?.focus();
+		composerRef.current?.scrollIntoView({ block: "center" });
+	};
 
 	return (
-		<div className="flex h-full flex-col overflow-y-auto">
-			<TopBar.Title>
-				<h1 className="font-semibold text-sm">Investigation</h1>
-			</TopBar.Title>
-			{insight ? (
-				<TopBar.Actions>
-					<ShareMenu
-						insightId={insight.id}
-						latestFindingAt={latest?.createdAt ?? null}
-					/>
-				</TopBar.Actions>
-			) : null}
+		<div className="mx-auto w-full max-w-3xl px-4 pb-20 sm:px-6">
+			<Link
+				className="mt-3 inline-flex w-fit items-center gap-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground lg:hidden"
+				href={backHref}
+			>
+				<ArrowLeftIcon className="size-3.5 shrink-0" />
+				Inbox
+			</Link>
 
-			<div className="mx-auto w-full max-w-4xl space-y-3 px-3 pt-3 pb-20 sm:space-y-4 sm:p-5">
-				<Link
-					className="inline-flex w-fit items-center gap-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground"
-					href="/insights/investigations"
-				>
-					<ArrowLeftIcon className="size-3.5 shrink-0" />
-					All investigations
-				</Link>
+			{isLoading && (
+				<div aria-busy className="space-y-3 py-6" role="status">
+					<Skeleton className="h-5 w-2/3 rounded" />
+					<Skeleton className="h-4 w-full rounded" />
+					<Skeleton className="h-4 w-4/5 rounded" />
+				</div>
+			)}
 
-				{isLoading && (
-					<Card aria-label="Investigation">
-						<div className="space-y-3 p-4 sm:p-5">
-							<Skeleton className="h-5 w-2/3 rounded" />
-							<Skeleton className="h-4 w-full rounded" />
-							<Skeleton className="h-4 w-4/5 rounded" />
-						</div>
-					</Card>
-				)}
-
-				{!isLoading && insight && (
-					<Card aria-label="Investigation">
-						<header className="space-y-2 border-b px-4 py-4 sm:px-5">
-							<div className="flex items-center justify-between gap-3">
-								<p className="truncate font-medium text-muted-foreground text-xs">
+			{!isLoading && insight && (
+				<article aria-label="Investigation">
+					<header className="space-y-2 border-b py-4">
+						<div className="flex items-center justify-between gap-3">
+							<p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs">
+								<span className="truncate font-medium">
 									{insight.websiteName ?? insight.websiteDomain}
-								</p>
-								<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-xs">
+								</span>
+								{latest ? (
+									<>
+										<span className="text-muted-foreground/30">&middot;</span>
+										<span className="shrink-0">
+											{formatPeriod(latest.period.current)} vs{" "}
+											{formatPeriod(latest.period.previous)}
+										</span>
+									</>
+								) : null}
+								<span className="text-muted-foreground/30">&middot;</span>
+								<span className="flex shrink-0 items-center gap-1.5">
 									<StatusDot
 										color={
-											insight.status === "resolved" ? "success" : "warning"
+											resolved
+												? "success"
+												: thread?.state === "needs_you"
+													? "warning"
+													: "info"
 										}
 									/>
-									{insight.status === "resolved"
+									{resolved
 										? recovered
 											? "Recovered"
-											: "Resolved"
-										: "Open"}
+											: "Done"
+										: thread
+											? threadStatus(thread)
+											: "Open"}
 								</span>
-							</div>
-							<h2 className="text-pretty font-semibold text-base text-foreground leading-snug sm:text-lg">
-								{latest?.entity.label ?? insight.title}
-							</h2>
-						</header>
-						<CaseState
-							items={data?.timeline ?? []}
-							latest={latest ?? null}
-							recovered={recovered}
-						/>
-						<CaseActivity
-							canReply={data?.canReply ?? false}
-							insightId={insight.id}
-							isResolved={insight.status === "resolved"}
-							items={data?.timeline ?? []}
-							replyOpen={replyOpen}
-							onReplyOpenChange={setReplyOpen}
-							websiteId={insight.websiteId}
-						/>
-					</Card>
-				)}
+								{sourceLink ? (
+									<>
+										<span className="text-muted-foreground/30">&middot;</span>
+										<Link
+											className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
+											href={sourceLink.href}
+										>
+											{sourceLink.label}
+											<ArrowSquareOutIcon aria-hidden className="size-3" />
+										</Link>
+									</>
+								) : null}
+							</p>
+							<ShareMenu
+								insightId={insight.id}
+								latestFindingAt={latest?.createdAt ?? null}
+							/>
+						</div>
+						<h1 className="text-balance font-semibold text-foreground text-lg leading-snug">
+							{latest?.outcome.title ?? insight.title}
+						</h1>
+					</header>
 
-				{!(isLoading || insight) && (
-					<EmptyState
-						action={{
-							label: "All investigations",
-							onClick: () => router.push("/insights/investigations"),
-						}}
-						description={
-							isError
-								? "This investigation is unavailable, or it belongs to a workspace you can't access."
-								: "This investigation no longer exists."
-						}
-						icon={<LightbulbIcon />}
-						className="min-h-[50dvh]"
-						title="Investigation not available"
-						variant="minimal"
+					<NextPanel
+						insightId={insight.id}
+						latest={latest}
+						onAnswer={focusComposer}
+						thread={thread}
 					/>
-				)}
-			</div>
+
+					{latest ? (
+						<section aria-label="Finding" className="py-4">
+							<FindingBody evidenceOpen={!resolved} outcome={latest.outcome} />
+						</section>
+					) : null}
+
+					{earlier.length > 0 ? <History items={earlier} /> : null}
+
+					{replies.length > 0 ? (
+						<section
+							aria-label="Conversation"
+							className="space-y-3 border-t py-4"
+						>
+							{replies.map((item) => (
+								<ReplyEntry item={item} key={item.id} />
+							))}
+						</section>
+					) : null}
+
+					{data?.canReply ? (
+						<Composer
+							answerRequested={
+								!resolved &&
+								latest?.outcome.next.type === "ask" &&
+								!replies.some((item) => item.intent === "analysis")
+							}
+							busy={replies.some(
+								(item) => item.status === "queued" || item.status === "running"
+							)}
+							failedReply={
+								replies.findLast((item) => item.status === "failed") ?? null
+							}
+							insightId={insight.id}
+							textareaRef={composerRef}
+						/>
+					) : null}
+				</article>
+			)}
+
+			{!(isLoading || insight) && (
+				<EmptyState
+					action={{
+						label: "Back to the inbox",
+						onClick: () => router.push("/insights"),
+					}}
+					className="min-h-[50dvh]"
+					description={
+						isError
+							? "This investigation is unavailable, or it belongs to a workspace you can't access."
+							: "This investigation no longer exists."
+					}
+					icon={<LightbulbIcon />}
+					title="Investigation not available"
+					variant="minimal"
+				/>
+			)}
 		</div>
+	);
+}
+
+function NextPanel({
+	insightId,
+	latest,
+	onAnswer,
+	thread,
+}: {
+	insightId: string;
+	latest: InvestigationItem | null;
+	onAnswer: () => void;
+	thread: InboxThread | null;
+}) {
+	if (!latest) {
+		return null;
+	}
+	const next = latest.outcome.next;
+	const need = thread?.need ?? null;
+	const execution = next.type === "act" ? next.execution : null;
+	const definitionType =
+		latest.entity.type === "goal" || latest.entity.type === "funnel"
+			? latest.entity.type
+			: null;
+	const executable =
+		execution &&
+		definitionType &&
+		(execution.operation === "edit" || execution.operation === "delete")
+			? { definitionType, execution }
+			: null;
+	const copy = nextCopy(next, {
+		verificationFailed: latest.outcome.verification?.status === "failed",
+	});
+	const pending = thread?.pendingReply ?? null;
+	if (thread && pending && pending.status !== "failed") {
+		return (
+			<section
+				aria-label="Next step"
+				className="my-4 flex items-start gap-3 rounded border bg-muted/30 px-4 py-3"
+			>
+				<Spinner className="mt-0.5" size="sm" />
+				<div>
+					<p className="font-medium text-foreground text-sm">
+						{threadStatus(thread)}
+					</p>
+					<p className="mt-0.5 text-pretty text-muted-foreground text-xs leading-relaxed">
+						Databuddy is on it. The result lands here and in your inbox, usually
+						within a few minutes.
+					</p>
+				</div>
+			</section>
+		);
+	}
+
+	return (
+		<section
+			aria-label="Next step"
+			className={cn(
+				"my-4 rounded border px-4 py-3",
+				need ? "border-primary/20 bg-primary/5" : "bg-muted/30"
+			)}
+		>
+			<p className="font-medium text-muted-foreground text-xs">
+				{need ? NEED_CONFIG[need].heading : copy.label}
+			</p>
+			<p className="mt-1 text-pretty font-medium text-foreground text-sm leading-relaxed">
+				{copy.body}
+			</p>
+			{copy.detail ? (
+				<p className="mt-1.5 text-muted-foreground text-xs leading-relaxed">
+					{copy.detail}
+				</p>
+			) : null}
+			{need ? (
+				<div className="mt-3 flex flex-wrap items-center gap-2">
+					{need === "answer" ? (
+						<Button onClick={onAnswer} size="sm" type="button">
+							Answer
+						</Button>
+					) : null}
+					{need === "apply" && executable ? (
+						<ExecuteDefinitionAction
+							action="Apply this fix"
+							definitionType={executable.definitionType}
+							entityLabel={latest.entity.label}
+							execution={executable.execution}
+							insightId={insightId}
+						/>
+					) : null}
+					{need === "done" || (need === "apply" && !executable) ? (
+						<MarkDoneButton insightId={insightId} label="I made this change" />
+					) : null}
+					{need === "look" ? (
+						<Button
+							onClick={onAnswer}
+							size="sm"
+							type="button"
+							variant="secondary"
+						>
+							Tell Databuddy what changed
+						</Button>
+					) : null}
+				</div>
+			) : null}
+		</section>
+	);
+}
+
+function History({ items }: { items: TimelineItem[] }) {
+	const [open, setOpen] = useState(false);
+	return (
+		<section aria-label="Earlier activity" className="border-t py-3">
+			<Button
+				aria-expanded={open}
+				className="text-muted-foreground"
+				onClick={() => setOpen((value) => !value)}
+				size="sm"
+				type="button"
+				variant="ghost"
+			>
+				Earlier
+				<span className="tabular-nums">({items.length})</span>
+				<CaretDownIcon
+					aria-hidden
+					className={cn("size-3", open && "rotate-180")}
+				/>
+			</Button>
+			{open ? (
+				<ol className="mt-2 divide-y rounded border">
+					{items.map((item) => (
+						<HistoryRow item={item} key={`${item.kind}-${item.id}`} />
+					))}
+				</ol>
+			) : null}
+		</section>
+	);
+}
+
+function HistoryRow({ item }: { item: TimelineItem }) {
+	const [open, setOpen] = useState(false);
+	const label =
+		item.kind === "reply"
+			? item.body
+			: `${nextCopy(item.outcome.next).label}: ${item.outcome.title}`;
+	return (
+		<li>
+			<Button
+				aria-expanded={open}
+				className="h-auto w-full justify-start gap-2 rounded-none px-3 py-2 text-left font-normal text-xs"
+				onClick={() => setOpen((value) => !value)}
+				type="button"
+				variant="ghost"
+			>
+				<Avatar kind={item.kind} />
+				<span className="min-w-0 flex-1 truncate text-foreground/85">
+					{item.kind === "reply" ? `${item.author}: ${label}` : label}
+				</span>
+				<time
+					className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
+					dateTime={item.createdAt}
+					title={formatDateTime(item.createdAt)}
+				>
+					{fromNow(item.createdAt)}
+				</time>
+			</Button>
+			{open ? (
+				<div className="border-t bg-muted/20 px-3 py-3">
+					{item.kind === "reply" ? (
+						<ReplyBody item={item} />
+					) : (
+						<div className="space-y-3">
+							<p className="text-muted-foreground text-xs">
+								{formatPeriod(item.period.current)} vs{" "}
+								{formatPeriod(item.period.previous)}
+							</p>
+							<FindingBody evidenceOpen={false} outcome={item.outcome} />
+							<p className="text-pretty text-muted-foreground text-xs leading-relaxed">
+								<span className="font-medium">
+									{nextCopy(item.outcome.next).label}:
+								</span>{" "}
+								{nextCopy(item.outcome.next).body}
+							</p>
+						</div>
+					)}
+				</div>
+			) : null}
+		</li>
+	);
+}
+
+function Avatar({ kind }: { kind: TimelineItem["kind"] }) {
+	return kind === "reply" ? (
+		<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+			<UserIcon className="size-3" />
+		</span>
+	) : (
+		<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+			<RobotIcon className="size-3" />
+		</span>
+	);
+}
+
+function ReplyEntry({ item }: { item: ReplyItem }) {
+	return (
+		<article className="space-y-2">
+			<header className="flex items-center gap-2 text-xs">
+				<Avatar kind="reply" />
+				<span className="truncate font-medium text-foreground">
+					{item.author}
+				</span>
+				<time
+					className="shrink-0 text-[11px] text-muted-foreground"
+					dateTime={item.createdAt}
+					suppressHydrationWarning
+					title={formatDateTime(item.createdAt)}
+				>
+					{fromNow(item.createdAt)}
+				</time>
+			</header>
+			<ReplyBody item={item} />
+		</article>
+	);
+}
+
+function ReplyBody({ item }: { item: ReplyItem }) {
+	return (
+		<div className="space-y-2">
+			<p className="whitespace-pre-wrap text-foreground/85 text-sm leading-relaxed">
+				{item.body}
+			</p>
+			{item.assistantText ? (
+				<div className="flex gap-2">
+					<Avatar kind="investigation" />
+					<MessageResponse
+						className="min-w-0 text-sm leading-relaxed"
+						mode="static"
+					>
+						{item.assistantText}
+					</MessageResponse>
+				</div>
+			) : null}
+			{item.status === "queued" || item.status === "running" ? (
+				<div className="flex items-center gap-2 text-muted-foreground text-xs">
+					<Spinner size="sm" />
+					{item.status === "queued"
+						? "Queued…"
+						: item.intent === "clarification"
+							? "Databuddy is answering…"
+							: "Databuddy is investigating…"}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function Composer({
+	answerRequested,
+	busy,
+	failedReply,
+	insightId,
+	textareaRef,
+}: {
+	answerRequested: boolean;
+	busy: boolean;
+	failedReply: ReplyItem | null;
+	insightId: string;
+	textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+}) {
+	const queryClient = useQueryClient();
+	const [body, setBody] = useState("");
+	const refresh = () =>
+		queryClient
+			.invalidateQueries({ queryKey: insightQueries.all() })
+			.catch(() => undefined);
+	const reply = useMutation({
+		...orpc.insights.reply.mutationOptions(),
+		meta: { suppressGlobalErrorToast: true },
+		onError: (error) => showErrorToast(error, "Could not send your message"),
+		onSuccess: (result) => {
+			setBody("");
+			refresh();
+			if (result.reply.status === "failed") {
+				toast.error("Databuddy could not start on this", {
+					description: "Your message was saved. Try again in a moment.",
+				});
+			}
+		},
+	});
+	const retry = useMutation({
+		...orpc.insights.retryReply.mutationOptions(),
+		meta: { suppressGlobalErrorToast: true },
+		onError: (error) => showErrorToast(error, "Could not retry"),
+		onSuccess: (result) => {
+			refresh();
+			if (result.status === "failed") {
+				toast.error("Databuddy could not start on this", {
+					description: "Try again in a moment.",
+				});
+			}
+		},
+	});
+	const pending = reply.isPending || retry.isPending;
+	const send = (intent: "analysis" | "clarification") => {
+		const trimmed = body.trim();
+		if (!trimmed || busy || pending) {
+			return;
+		}
+		reply.mutate({
+			body: trimmed,
+			insightId,
+			intent,
+			...(intent === "analysis"
+				? { acceptedPriceUsd: INVESTIGATION_USAGE.priceUsd }
+				: {}),
+		});
+	};
+	const submit = (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		send(answerRequested ? "analysis" : "clarification");
+	};
+	const costNote = isSelfHosted
+		? null
+		: answerRequested
+			? "Continuing uses 1 investigation from your allowance, then costs $1."
+			: "Questions are free. A new investigation uses your allowance, then costs $1.";
+
+	return (
+		<form className="border-t pt-4" onSubmit={submit}>
+			{failedReply && !busy ? (
+				<div className="mb-3 flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
+					Your last message did not go through.
+					<Button
+						loading={retry.isPending}
+						onClick={() => retry.mutate({ replyId: failedReply.id })}
+						size="sm"
+						type="button"
+						variant="secondary"
+					>
+						Try again
+					</Button>
+				</div>
+			) : null}
+			<Field>
+				<Field.Label className={answerRequested ? undefined : "sr-only"}>
+					{answerRequested ? "Your answer" : "Message"}
+				</Field.Label>
+				<Textarea
+					disabled={busy}
+					maxLength={2000}
+					maxRows={8}
+					minRows={2}
+					onChange={(event) => setBody(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+							event.preventDefault();
+							send(answerRequested ? "analysis" : "clarification");
+						}
+					}}
+					placeholder={
+						busy
+							? "Databuddy is working on this…"
+							: answerRequested
+								? "Answer the question above…"
+								: "Ask Databuddy about this finding…"
+					}
+					ref={textareaRef}
+					value={body}
+				/>
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					{costNote ? (
+						<p className="text-pretty text-muted-foreground text-xs">
+							{costNote}
+						</p>
+					) : (
+						<span />
+					)}
+					<div className="flex items-center gap-2">
+						{answerRequested ? null : (
+							<Button
+								disabled={busy || !body.trim() || pending}
+								onClick={() => send("analysis")}
+								size="sm"
+								type="button"
+								variant="ghost"
+							>
+								Run a new investigation
+							</Button>
+						)}
+						<Button
+							disabled={busy || !body.trim() || pending}
+							loading={reply.isPending}
+							size="sm"
+							type="submit"
+						>
+							{answerRequested ? "Answer" : "Send"}
+						</Button>
+					</div>
+				</div>
+			</Field>
+		</form>
 	);
 }
 
@@ -315,407 +797,5 @@ function ShareMenu({
 				</DropdownMenu.Group>
 			</DropdownMenu.Content>
 		</DropdownMenu>
-	);
-}
-
-function CaseActivity({
-	canReply,
-	insightId,
-	isResolved,
-	items,
-	onReplyOpenChange,
-	replyOpen,
-	websiteId,
-}: {
-	canReply: boolean;
-	insightId: string;
-	isResolved: boolean;
-	items: TimelineItem[];
-	onReplyOpenChange: (open: boolean) => void;
-	replyOpen: boolean;
-	websiteId: string;
-}) {
-	const queryClient = useQueryClient();
-	const retry = useMutation({
-		...orpc.insights.retryReply.mutationOptions(),
-		onError: (error) => {
-			showErrorToast(error, "Failed to retry investigation");
-		},
-		meta: { suppressGlobalErrorToast: true },
-		onSuccess: (result) => {
-			queryClient.invalidateQueries({
-				queryKey: insightQueries.all(),
-			});
-			if (result.status === "failed") {
-				toast.error("Failed to start investigation", {
-					description: "Your reply was saved. Try again in a moment.",
-				});
-			} else {
-				toast.success("Investigation resumed");
-			}
-		},
-	});
-	const active =
-		retry.isPending ||
-		items.some(
-			(item) =>
-				item.kind === "reply" &&
-				(item.status === "queued" || item.status === "running")
-		);
-	const latestReplyId = items.findLast((item) => item.kind === "reply")?.id;
-	const latestInvestigation = items.findLast(
-		(item): item is InvestigationItem => item.kind === "investigation"
-	);
-	const latestInvestigationId = latestInvestigation?.id;
-	const settled = active || isResolved;
-	const answerRequested =
-		!settled && latestInvestigation?.outcome.next.type === "ask";
-	const [historyExpanded, setHistoryExpanded] = useState(false);
-	const visibleItems = settled && !historyExpanded ? items.slice(-1) : items;
-
-	return (
-		<section aria-label="Investigation activity">
-			<ol className="divide-y">
-				{visibleItems.map((item) => (
-					<TimelineEntry
-						collapseEvidence={
-							settled &&
-							item.kind === "investigation" &&
-							item.id === latestInvestigationId
-						}
-						item={item}
-						insightId={
-							item.kind === "investigation" && item.id === latestInvestigationId
-								? insightId
-								: null
-						}
-						key={`${item.kind}-${item.id}`}
-						onRetry={
-							canReply && !active && item.id === latestReplyId
-								? (replyId) => retry.mutate({ replyId })
-								: undefined
-						}
-						retrying={retry.isPending && retry.variables.replyId === item.id}
-						websiteId={websiteId}
-					/>
-				))}
-			</ol>
-			{settled && items.length > 1 ? (
-				<div className="border-t px-4 py-2 sm:px-5">
-					<Button
-						onClick={() => setHistoryExpanded((expanded) => !expanded)}
-						size="sm"
-						type="button"
-						variant="ghost"
-					>
-						{historyExpanded
-							? "Hide earlier updates"
-							: `Show ${items.length - 1} earlier update${items.length === 2 ? "" : "s"}`}
-						<CaretDownIcon
-							className={historyExpanded ? "rotate-180" : undefined}
-						/>
-					</Button>
-				</div>
-			) : null}
-
-			{canReply && (
-				<ContextReply
-					answerRequested={answerRequested}
-					disabled={active}
-					insightId={insightId}
-					onOpenChange={onReplyOpenChange}
-					open={replyOpen || answerRequested}
-				/>
-			)}
-		</section>
-	);
-}
-
-function TimelineEntry({
-	collapseEvidence,
-	insightId,
-	item,
-	onRetry,
-	retrying,
-	websiteId,
-}: {
-	collapseEvidence: boolean;
-	insightId: string | null;
-	item: TimelineItem;
-	onRetry?: (replyId: string) => void;
-	retrying: boolean;
-	websiteId: string;
-}) {
-	return (
-		<li
-			className={
-				item.kind === "reply"
-					? "bg-muted/30 px-4 py-4 sm:px-5"
-					: "px-4 py-4 sm:px-5"
-			}
-		>
-			<article className="min-w-0 space-y-3">
-				<header className="flex min-w-0 items-center gap-2 text-xs">
-					{item.kind === "reply" ? (
-						<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground">
-							<UserIcon className="size-3" />
-						</span>
-					) : (
-						<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-							<RobotIcon className="size-3" />
-						</span>
-					)}
-					<div className="flex min-w-0 items-center gap-2">
-						<span className="truncate font-medium text-foreground">
-							{item.kind === "reply" ? item.author : "Databuddy"}
-						</span>
-						<span aria-hidden className="text-muted-foreground/50">
-							·
-						</span>
-						<time
-							className="shrink-0 text-[11px] text-muted-foreground"
-							dateTime={item.createdAt}
-							suppressHydrationWarning
-							title={formatDateTime(item.createdAt)}
-						>
-							{fromNow(item.createdAt)}
-						</time>
-					</div>
-				</header>
-				{item.kind === "reply" ? (
-					<>
-						<p className="whitespace-pre-wrap text-foreground/85 text-sm leading-relaxed">
-							{item.body}
-						</p>
-						{item.assistantText && (
-							<div className="space-y-1 border-t pt-3">
-								<p className="font-medium text-xs">Databuddy</p>
-								<MessageResponse
-									className="text-sm leading-relaxed"
-									mode="static"
-								>
-									{item.assistantText}
-								</MessageResponse>
-							</div>
-						)}
-						{(item.status === "queued" || item.status === "running") && (
-							<div className="flex items-center gap-2 text-muted-foreground text-xs">
-								<Spinner size="sm" />
-								{item.status === "queued"
-									? "Reply queued…"
-									: item.intent === "clarification"
-										? "Databuddy is answering…"
-										: "Databuddy is investigating…"}
-							</div>
-						)}
-						{item.status === "failed" && (
-							<div className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
-								<span>Reply failed.</span>
-								{onRetry && (
-									<Button
-										disabled={retrying}
-										loading={retrying}
-										onClick={() => onRetry(item.id)}
-										size="sm"
-										variant="secondary"
-									>
-										Try again
-									</Button>
-								)}
-							</div>
-						)}
-					</>
-				) : (
-					<InvestigationActivity
-						collapseEvidence={collapseEvidence}
-						insightId={insightId}
-						item={item}
-						websiteId={websiteId}
-					/>
-				)}
-			</article>
-		</li>
-	);
-}
-
-function ContextReply({
-	answerRequested,
-	disabled,
-	insightId,
-	onOpenChange,
-	open,
-}: {
-	answerRequested: boolean;
-	disabled: boolean;
-	insightId: string;
-	onOpenChange: (open: boolean) => void;
-	open: boolean;
-}) {
-	if (!open) {
-		return (
-			<div className="border-t px-4 py-2 sm:px-5" id="context-reply">
-				<Button
-					disabled={disabled}
-					onClick={() => onOpenChange(true)}
-					size="sm"
-					type="button"
-					variant="ghost"
-				>
-					Ask about this investigation
-				</Button>
-			</div>
-		);
-	}
-
-	return (
-		<ReplyComposer
-			answerRequested={answerRequested}
-			disabled={disabled}
-			insightId={insightId}
-			onClose={() => onOpenChange(false)}
-		/>
-	);
-}
-
-function ReplyComposer({
-	answerRequested,
-	disabled,
-	insightId,
-	onClose,
-}: {
-	answerRequested: boolean;
-	disabled: boolean;
-	insightId: string;
-	onClose: () => void;
-}) {
-	const queryClient = useQueryClient();
-	const [body, setBody] = useState("");
-	const replyMutation = useMutation({
-		...orpc.insights.reply.mutationOptions(),
-		onError: (error) => {
-			showErrorToast(error, "Failed to add reply");
-		},
-		meta: { suppressGlobalErrorToast: true },
-		onSuccess: (data) => {
-			setBody("");
-			onClose();
-			queryClient.invalidateQueries({
-				queryKey: insightQueries.all(),
-			});
-			if (data.reply.status === "failed") {
-				toast.error("Failed to start investigation", {
-					description: "Your reply was saved. Try again in a moment.",
-				});
-			}
-		},
-	});
-
-	const submitReply = (event: FormEvent<HTMLFormElement>) => {
-		event.preventDefault();
-		const trimmed = body.trim();
-		if (!trimmed) {
-			return;
-		}
-		sendReply(
-			trimmed,
-			answerRequested
-				? "Investigation continuing with your answer"
-				: "Databuddy is answering your clarification",
-			answerRequested ? "analysis" : "clarification"
-		);
-	};
-	const sendReply = (
-		message: string,
-		successMessage: string,
-		intent: "clarification" | "analysis" = "clarification"
-	) => {
-		if (disabled || replyMutation.isPending) {
-			return;
-		}
-		replyMutation.mutate(
-			{
-				body: message,
-				insightId,
-				intent,
-				...(intent === "analysis"
-					? { acceptedPriceUsd: INVESTIGATION_USAGE.priceUsd }
-					: {}),
-			},
-			{
-				onSuccess: (data) => {
-					if (data.reply.status !== "failed") {
-						toast.success(successMessage);
-					}
-				},
-			}
-		);
-	};
-	return (
-		<form className="border-t px-4 py-4 sm:px-5" onSubmit={submitReply}>
-			<Field>
-				<Field.Label className={answerRequested ? undefined : "sr-only"}>
-					{answerRequested ? "Your answer" : "Question"}
-				</Field.Label>
-				<Textarea
-					disabled={disabled}
-					maxLength={2000}
-					maxRows={8}
-					minRows={2}
-					onChange={(event) => setBody(event.target.value)}
-					placeholder={
-						answerRequested
-							? "Answer the question above to continue…"
-							: "Ask about this result, or write a new question…"
-					}
-					value={body}
-				/>
-				<p className="text-pretty text-muted-foreground text-xs">
-					{answerRequested
-						? isSelfHosted
-							? "Databuddy will continue this investigation using your answer."
-							: "Continuing uses 1 investigation from your allowance, then costs $1."
-						: isSelfHosted
-							? "Ask a follow-up question or start a new investigation."
-							: "Clarifications are included. New investigations use your allowance, then cost $1 each."}
-				</p>
-				<div className="flex flex-wrap justify-end gap-2">
-					{!answerRequested && (
-						<>
-							<Button
-								disabled={disabled || !body.trim() || replyMutation.isPending}
-								onClick={() =>
-									sendReply(body.trim(), "New analysis queued", "analysis")
-								}
-								size="sm"
-								type="button"
-								variant="secondary"
-							>
-								New analysis · 1 investigation
-							</Button>
-							<Button
-								disabled={replyMutation.isPending}
-								onClick={onClose}
-								size="sm"
-								type="button"
-								variant="ghost"
-							>
-								Cancel
-							</Button>
-						</>
-					)}
-					<Button
-						disabled={disabled || !body.trim() || replyMutation.isPending}
-						loading={replyMutation.isPending}
-						size="sm"
-						type="submit"
-					>
-						<PaperPlaneIcon className="size-3.5" />
-						{answerRequested
-							? "Answer and continue · 1 investigation"
-							: "Send clarification"}
-					</Button>
-				</div>
-			</Field>
-		</form>
 	);
 }

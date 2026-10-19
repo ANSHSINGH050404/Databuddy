@@ -63,6 +63,19 @@ export const insightQueries = {
 			retry: 2,
 			retryDelay: (attempt: number) => Math.min(2000 * 2 ** attempt, 15_000),
 		}),
+	inbox: (organizationId: string | undefined) =>
+		queryOptions({
+			queryKey: [...INSIGHTS_ROOT, "inbox", organizationId] as const,
+			queryFn: () =>
+				orpc.insights.inbox.call({ organizationId: organizationId ?? "" }),
+			enabled: Boolean(organizationId),
+			staleTime: 60 * 1000,
+			gcTime: INSIGHT_CACHE.gcTime,
+			refetchOnWindowFocus: true,
+			refetchInterval: 60 * 1000,
+			retry: 2,
+			retryDelay: (attempt: number) => Math.min(2000 * 2 ** attempt, 15_000),
+		}),
 	byId: (insightId: string | undefined) =>
 		queryOptions({
 			queryKey: [...INSIGHTS_ROOT, "by-id", insightId] as const,
@@ -141,3 +154,7 @@ function fetchInsightById(insightId: string) {
 }
 
 export type InsightByIdResponse = Awaited<ReturnType<typeof fetchInsightById>>;
+
+export type InboxThread = Awaited<
+	ReturnType<typeof orpc.insights.inbox.call>
+>["threads"][number];

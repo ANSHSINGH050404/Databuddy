@@ -4,8 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import {
-	CaseState,
-	InvestigationActivity,
+	FindingBody,
+	formatPeriod,
+	nextCopy,
 } from "@/app/(main)/insights/_components/investigation-row";
 import { publicInvestigationMarketingHref } from "@/app/public/public-dashboard-constants";
 import { FaviconImage } from "@/components/analytics/favicon-image";
@@ -119,22 +120,37 @@ export default function PublicInvestigationPage() {
 								</span>
 							</div>
 							<h2 className="text-pretty font-semibold text-base text-foreground leading-snug sm:text-lg">
-								{latest?.entity.label ?? data.insight.title}
+								{latest?.outcome.title ?? data.insight.title}
 							</h2>
 						</header>
-						<CaseState
-							items={data.timeline}
-							latest={latest}
-							recovered={recovered}
-						/>
+						{latest ? (
+							<section
+								aria-label="Next step"
+								className="border-b bg-muted/20 px-4 py-3 sm:px-5"
+							>
+								<p className="font-medium text-muted-foreground text-xs">
+									{nextCopy(latest.outcome.next).label}
+								</p>
+								<p className="mt-1 text-pretty font-medium text-foreground text-sm leading-relaxed">
+									{nextCopy(latest.outcome.next).body}
+								</p>
+							</section>
+						) : null}
 						<ol className="divide-y">
 							{visibleItems.map((item) => (
-								<li className="px-4 py-4 sm:px-5" key={item.id}>
-									<InvestigationActivity
-										collapseEvidence={false}
-										insightId={null}
-										item={item}
-										websiteId={null}
+								<li className="space-y-3 px-4 py-4 sm:px-5" key={item.id}>
+									<p className="text-muted-foreground text-xs">
+										{formatPeriod(item.period.current)} vs{" "}
+										{formatPeriod(item.period.previous)}
+									</p>
+									{item.id === latest?.id ? null : (
+										<h3 className="text-pretty font-medium text-foreground text-sm leading-snug">
+											{item.outcome.title}
+										</h3>
+									)}
+									<FindingBody
+										evidenceOpen={item.id === latest?.id}
+										outcome={item.outcome}
 									/>
 								</li>
 							))}

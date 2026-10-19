@@ -1,48 +1,38 @@
 "use client";
 
-import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
-import { usePathname } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { EmptyState } from "@databuddy/ui";
+import { GlobeIcon } from "@databuddy/ui/icons";
+import { usePathname, useSearchParams } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useRef } from "react";
-import { PageNavigation } from "@/components/layout/page-navigation";
 import { TopBar } from "@/components/layout/top-bar";
 import { useOrganizationsContext } from "@/components/providers/organizations-provider";
 import { useWebsitesLight } from "@/hooks/use-websites";
 import { insightQueries } from "@/lib/insight-api";
 import { orpc } from "@/lib/orpc";
 import { cn } from "@/lib/utils";
-import { Button, EmptyState } from "@databuddy/ui";
-import {
-	ArrowClockwiseIcon,
-	GlobeIcon,
-	LightbulbIcon,
-	MagnifyingGlassIcon,
-} from "@databuddy/ui/icons";
+import { isActiveRun } from "../_lib/insight-run";
+import { type InboxSection, useInbox } from "./inbox-state";
 import { InvestigationSettings } from "./investigation-settings";
 import { InvestigationsAccessNotice } from "./investigations-access-notice";
-import { isActiveRun } from "../_lib/insight-run";
+import { ThreadList, useSuggestions } from "./thread-list";
 
-const INSIGHTS_LIST_ROUTES = new Set([
-	"/insights",
-	"/insights/investigations",
-	"/insights/recommendations",
-]);
+const SECTION_ROUTES: Record<string, InboxSection> = {
+	"/insights": "needs_you",
+	"/insights/first-review": "needs_you",
+	"/insights/recommendations": "needs_you",
+	"/insights/resolved": "resolved",
+	"/insights/watching": "watching",
+};
 
 export function InsightsShell({ children }: { children: ReactNode }) {
 	const pathname = usePathname();
-	return INSIGHTS_LIST_ROUTES.has(pathname) ? (
-		<InsightsListShell>{children}</InsightsListShell>
-	) : (
-		children
-	);
-}
-
-function InsightsListShell({ children }: { children: ReactNode }) {
+	const searchParams = useSearchParams();
 	const { activeOrganization, activeOrganizationId } =
 		useOrganizationsContext();
 	const organizationId =
 		activeOrganization?.id ?? activeOrganizationId ?? undefined;
 	const queryClient = useQueryClient();
-	const insightsFetching = useIsFetching({ queryKey: insightQueries.all() });
 	const latestRun = useQuery({
 		...orpc.insightGeneration.getLatestRun.queryOptions({
 			input: { organizationId },
@@ -60,6 +50,8 @@ function InsightsListShell({ children }: { children: ReactNode }) {
 	const { websites, isLoading: websitesLoading } = useWebsitesLight();
 	const hasNoWebsites =
 		!websitesLoading && websites !== undefined && websites.length === 0;
+	const inbox = useInbox();
+	const suggestions = useSuggestions();
 	const refreshInsights = useCallback(() => {
 		queryClient
 			.invalidateQueries({ queryKey: insightQueries.all() })
@@ -106,12 +98,30 @@ function InsightsListShell({ children }: { children: ReactNode }) {
 	}, [latestRun.data, latestRun.isSuccess, organizationId, refreshInsights]);
 
 	const isAnalyzing = isActiveRun(latestRun.data?.status);
-	const refresh = () => {
-		Promise.all([
-			queryClient.invalidateQueries({ queryKey: insightQueries.all() }),
-			latestRun.refetch(),
-		]).catch(() => undefined);
-	};
+
+	const isSectionRoute = pathname in SECTION_ROUTES;
+	const threadId =
+		!isSectionRoute && pathname.startsWith("/insights/")
+			? (pathname.split("/")[2] ?? null)
+			: null;
+	const suggestionId =
+		pathname === "/insights/recommendations" ? searchParams.get("id") : null;
+	const selectedSuggestion = suggestionId
+		? (suggestions.data?.pages
+				.flatMap((page) => page.recommendations)
+				.find((item) => item.id === suggestionId) ?? null)
+		: null;
+	const isThreadRoute = Boolean(
+		threadId || suggestionId || pathname === "/insights/first-review"
+	);
+	const selectedThread = threadId
+		? (inbox.data?.threads.find((thread) => thread.id === threadId) ?? null)
+		: null;
+	const section: InboxSection = threadId
+		? (selectedThread?.state ?? "needs_you")
+		: selectedSuggestion?.saved
+			? "resolved"
+			: (SECTION_ROUTES[pathname] ?? "needs_you");
 
 	return (
 		<div className="flex h-full min-h-0 flex-col" aria-busy={websitesLoading}>
@@ -119,52 +129,12 @@ function InsightsListShell({ children }: { children: ReactNode }) {
 				<h1 className="font-semibold text-sm">Insights</h1>
 			</TopBar.Title>
 			<TopBar.Actions>
-				<Button
-					aria-label="Refresh insights"
-					disabled={websitesLoading}
-					onClick={refresh}
-					size="sm"
-					type="button"
-					variant="ghost"
-				>
-					<ArrowClockwiseIcon
-						aria-hidden
-						className={cn(
-							"size-3.5 shrink-0",
-							(insightsFetching > 0 || latestRun.isFetching) && "animate-spin"
-						)}
-					/>
-				</Button>
 				<InvestigationSettings
 					isAnalyzing={isAnalyzing}
 					key={organizationId}
 					organizationId={organizationId}
 				/>
 			</TopBar.Actions>
-
-			<PageNavigation
-				tabs={[
-					{
-						href: "/insights",
-						icon: LightbulbIcon,
-						id: "latest",
-						label: "Latest",
-					},
-					{
-						href: "/insights/investigations",
-						icon: MagnifyingGlassIcon,
-						id: "investigations",
-						label: "Investigations",
-					},
-					{
-						href: "/insights/recommendations",
-						icon: LightbulbIcon,
-						id: "recommendations",
-						label: "Recommendations",
-					},
-				]}
-				variant="tabs"
-			/>
 
 			<InvestigationsAccessNotice organizationId={organizationId} />
 
@@ -182,8 +152,27 @@ function InsightsListShell({ children }: { children: ReactNode }) {
 					variant="minimal"
 				/>
 			) : (
-				<div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
-					{children}
+				<div className="flex min-h-0 flex-1">
+					<aside
+						aria-label="Investigation threads"
+						className={cn(
+							"min-h-0 w-full shrink-0 flex-col border-r bg-background lg:flex lg:w-[24rem] xl:w-[26rem]",
+							isThreadRoute ? "hidden" : "flex"
+						)}
+					>
+						<ThreadList
+							section={section}
+							selectedId={threadId ?? suggestionId}
+						/>
+					</aside>
+					<main
+						className={cn(
+							"min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none lg:block",
+							isThreadRoute ? "block" : "hidden"
+						)}
+					>
+						{children}
+					</main>
 				</div>
 			)}
 		</div>
