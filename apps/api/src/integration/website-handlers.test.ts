@@ -158,6 +158,45 @@ describe("websites.list", () => {
 		expect(result[0].organizationId).toBe(orgA.id);
 	});
 
+	iit(
+		"lists another organization the user belongs to, as the OAuth consent page does",
+		async () => {
+			const user = await signUp();
+			const activeOrg = await insertOrganization();
+			const pickedOrg = await insertOrganization();
+			await addToOrganization(user.id, activeOrg.id, "owner");
+			await addToOrganization(user.id, pickedOrg.id, "member");
+			await insertWebsite({ organizationId: pickedOrg.id });
+
+			const result = await handler.list({
+				context: userContext(user, activeOrg.id),
+				input: { organizationId: pickedOrg.id },
+			});
+
+			expect(result).toHaveLength(1);
+			expect(result[0].organizationId).toBe(pickedOrg.id);
+		}
+	);
+
+	iit(
+		"rejects listing an organization the user is not a member of",
+		async () => {
+			const user = await signUp();
+			const activeOrg = await insertOrganization();
+			const otherOrg = await insertOrganization();
+			await addToOrganization(user.id, activeOrg.id, "owner");
+			await insertWebsite({ organizationId: otherOrg.id });
+
+			await expectCode(
+				handler.list({
+					context: userContext(user, activeOrg.id),
+					input: { organizationId: otherOrg.id },
+				}),
+				"FORBIDDEN"
+			);
+		}
+	);
+
 	iit("returns empty array for org with no websites", async () => {
 		const user = await signUp();
 		const org = await insertOrganization();

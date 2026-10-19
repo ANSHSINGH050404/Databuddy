@@ -788,6 +788,7 @@ export const websitesRouter = {
 				organizationId: input.organizationId,
 				resource: "website",
 				permissions: ["read"],
+				allowCrossOrg: true,
 			});
 
 			if (!workspace.organizationId) {
