@@ -18,12 +18,17 @@ describe("public copy contracts", () => {
 			join(import.meta.dir, "..", "content", "docs", "Integrations", "gtm.mdx"),
 			"utf8"
 		);
-		const loader = guide.split("```html\n<script>\n")[1]?.split("</script>")[0];
+		const normalizedGuide = guide.replace(/\r\n/g, "\n");
+		const loader = normalizedGuide
+			.split("```html\n<script>\n")[1]
+			?.split("</script>")[0];
 		expect(loader).toBeDefined();
 		if (!loader) {
 			throw new Error("Missing GTM loader");
 		}
-		expect(guide.match(/document\.createElement\("script"\)/g)).toHaveLength(1);
+		expect(
+			normalizedGuide.match(/document\.createElement\("script"\)/g)
+		).toHaveLength(1);
 		const attributes: Record<string, string> = {};
 		const script = {
 			src: "",
