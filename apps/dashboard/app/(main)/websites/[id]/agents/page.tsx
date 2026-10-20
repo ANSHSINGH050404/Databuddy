@@ -2096,7 +2096,7 @@ const SETUP_STACKS = [
 		methods: [
 			{
 				caption:
-					"No code, and you also see the HTTP status each crawler got. Needs a Vercel Pro or Enterprise plan; Vercel bills drains by volume.",
+					"No code, and you also see the HTTP status each crawler got. Vercel's logs leave out request headers, so agents that sign their requests, like ChatGPT agent, and markdown served from the same URL as HTML need the middleware. Needs a Vercel Pro or Enterprise plan; Vercel bills drains by volume.",
 				id: "drain",
 				label: "Log drain (no code)",
 			},
