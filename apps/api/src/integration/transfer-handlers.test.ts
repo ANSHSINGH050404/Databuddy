@@ -4,9 +4,11 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { appRouter } from "@databuddy/rpc";
 import { eq } from "@databuddy/db";
 import {
+	alarms,
 	statusPageMonitors,
 	statusPages,
 	uptimeSchedules,
+	websites,
 } from "@databuddy/db/schema";
 import {
 	reset,
@@ -261,5 +263,83 @@ describe("uptime.transfer", () => {
 
 		expect(await getScheduleOrg(scheduleId)).toBe(source.id);
 		expect(await getPageMonitors(pageId)).toHaveLength(1);
+	});
+});
+
+describe("websites.transfer", () => {
+	async function setupWebsite() {
+		const orgs = await setupOrgs();
+		const website = await insertWebsite({ organizationId: orgs.source.id });
+		const scheduleId = await insertSchedule(orgs.source.id, {
+			websiteId: website.id,
+		});
+		const transfer = () =>
+			call(
+				appRouter.websites.transfer,
+				userContext(orgs.user, orgs.source.id)
+			)({ websiteId: website.id, organizationId: orgs.target.id });
+		return { ...orgs, website, scheduleId, transfer };
+	}
+
+	async function getWebsiteOrg(websiteId: string) {
+		const [website] = await db()
+			.select({ organizationId: websites.organizationId })
+			.from(websites)
+			.where(eq(websites.id, websiteId));
+		return website?.organizationId;
+	}
+
+	iit("moves the website's uptime monitor with it", async () => {
+		const { user, target, website, scheduleId, transfer } =
+			await setupWebsite();
+
+		await transfer();
+
+		expect(await getWebsiteOrg(website.id)).toBe(target.id);
+		expect(await getScheduleOrg(scheduleId)).toBe(target.id);
+		const schedule = await call(
+			appRouter.uptime.getScheduleByWebsiteId,
+			userContext(user, target.id)
+		)({ websiteId: website.id });
+		expect(schedule?.id).toBe(scheduleId);
+	});
+
+	iit("refuses while the website has alerts", async () => {
+		const { source, website, scheduleId, transfer } = await setupWebsite();
+		await db()
+			.insert(alarms)
+			.values({
+				id: nextId("alarm"),
+				organizationId: source.id,
+				websiteId: website.id,
+				name: "Uptime alert",
+				triggerType: "uptime",
+			});
+
+		await expectCode(transfer(), "BAD_REQUEST");
+		expect(await getWebsiteOrg(website.id)).toBe(source.id);
+		expect(await getScheduleOrg(scheduleId)).toBe(source.id);
+	});
+
+	iit("refuses while the monitor is on a status page", async () => {
+		const { source, website, scheduleId, transfer } = await setupWebsite();
+		await attachMonitor(await insertStatusPage(source.id), scheduleId);
+
+		await expectCode(transfer(), "BAD_REQUEST");
+		expect(await getWebsiteOrg(website.id)).toBe(source.id);
+	});
+
+	iit("hides a monitor left in the previous organization", async () => {
+		const { user, target, website } = await setupWebsite();
+		await db()
+			.update(websites)
+			.set({ organizationId: target.id })
+			.where(eq(websites.id, website.id));
+
+		const schedule = await call(
+			appRouter.uptime.getScheduleByWebsiteId,
+			userContext(user, target.id)
+		)({ websiteId: website.id });
+		expect(schedule).toBeNull();
 	});
 });

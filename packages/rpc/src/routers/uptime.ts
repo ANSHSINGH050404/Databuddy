@@ -121,14 +121,17 @@ export const uptimeRouter = {
 		.input(z.object({ websiteId: z.string() }))
 		.output(getScheduleOutputSchema.nullable())
 		.handler(async ({ context, input }) => {
-			await withWorkspace(context, {
+			const workspace = await withWorkspace(context, {
 				websiteId: input.websiteId,
 				resource: "monitor",
 				permissions: ["read"],
 			});
 
 			const schedule = await db.query.uptimeSchedules.findFirst({
-				where: { websiteId: input.websiteId },
+				where: {
+					websiteId: input.websiteId,
+					organizationId: workspace.organizationId,
+				},
 				orderBy: { createdAt: "desc" },
 				with: { website: true },
 			});

@@ -1,7 +1,14 @@
 import { successOutputSchema } from "../lib/schemas";
 import { BusinessMemoryRetirementError } from "@databuddy/services/business-memory";
 import { and, db, desc, eq, sql } from "@databuddy/db";
-import { agentInstallTelemetry } from "@databuddy/db/schema";
+import {
+	agentInstallTelemetry,
+	alarms,
+	statusPageMonitors,
+	statusPages,
+	uptimeSchedules,
+} from "@databuddy/db/schema";
+import { ORPCError } from "@orpc/server";
 import { chQuery, purgeAnalyticsData } from "@databuddy/db/clickhouse";
 import { setTimeout as sleep } from "node:timers/promises";
 import { config } from "@databuddy/env/app";
@@ -42,7 +49,12 @@ import { z } from "zod";
 import { rpcError } from "../errors";
 import { logger } from "../lib/logger";
 import { appendRpcAuditEvent } from "../lib/audit";
-import { protectedProcedure, publicProcedure, trackedProcedure } from "../orpc";
+import {
+	type Context,
+	protectedProcedure,
+	publicProcedure,
+	trackedProcedure,
+} from "../orpc";
 import { setTrackProperties } from "../middleware/track-mutation";
 import { authorizeTransfer } from "../procedures/with-resource";
 import {
@@ -300,7 +312,101 @@ async function robotsBlockedSince(
 
 const websiteService = new WebsiteService(db);
 
+async function transferWebsite(
+	context: Context,
+	{
+		websiteId,
+		targetOrganizationId,
+		operation,
+	}: { websiteId: string; targetOrganizationId: string; operation: string }
+) {
+	const website = await authorizeTransfer(context, {
+		resource: "website",
+		id: websiteId,
+		targetOrganizationId,
+	});
+
+	try {
+		const updated = await context.db.transaction(async (tx) => {
+			const [alarm] = await tx
+				.select({ id: alarms.id })
+				.from(alarms)
+				.where(eq(alarms.websiteId, websiteId))
+				.limit(1);
+			if (alarm) {
+				throw rpcError.badRequest(
+					"This website has alerts that notify this organization's channels. Delete them in notification settings, then transfer the website."
+				);
+			}
+
+			const [listedMonitor] = await tx
+				.select({ slug: statusPages.slug })
+				.from(statusPageMonitors)
+				.innerJoin(
+					uptimeSchedules,
+					eq(statusPageMonitors.uptimeScheduleId, uptimeSchedules.id)
+				)
+				.innerJoin(
+					statusPages,
+					eq(statusPageMonitors.statusPageId, statusPages.id)
+				)
+				.where(eq(uptimeSchedules.websiteId, websiteId))
+				.limit(1);
+			if (listedMonitor) {
+				throw rpcError.badRequest(
+					`This website's uptime monitor is on the ${listedMonitor.slug} status page. Remove it from the page, then transfer the website.`
+				);
+			}
+
+			const updated = await websiteService.updateInTransaction(tx, websiteId, {
+				organizationId: targetOrganizationId,
+			});
+			await tx
+				.update(uptimeSchedules)
+				.set({ organizationId: targetOrganizationId })
+				.where(eq(uptimeSchedules.websiteId, websiteId));
+
+			const event = {
+				action: auditActions.WEBSITE_TRANSFERRED,
+				operation,
+				target: { id: updated.id, displayName: updated.name ?? updated.domain },
+				changes: {
+					organizationId: {
+						before: website.organizationId,
+						after: targetOrganizationId,
+					},
+				},
+			};
+			await Promise.all([
+				appendRpcAuditEvent(
+					context,
+					website.organizationId,
+					{ ...event, metadata: { transferDirection: "outbound" } },
+					tx
+				),
+				appendRpcAuditEvent(
+					context,
+					targetOrganizationId,
+					{ ...event, metadata: { transferDirection: "inbound" } },
+					tx
+				),
+			]);
+			return updated;
+		});
+		await websiteService.invalidateCachesAfterMutation({
+			before: website,
+			after: updated,
+		});
+		return updated;
+	} catch (error) {
+		handleServiceError(error);
+	}
+}
+
 function handleServiceError(error: unknown): never {
+	if (error instanceof ORPCError) {
+		throw error;
+	}
 	if (error instanceof BusinessMemoryRetirementError) {
 		throw rpcError.serviceUnavailable(
 			4,
@@ -1181,79 +1287,17 @@ export const websitesRouter = {
 		})
 		.input(transferWebsiteSchema)
 		.output(websiteOutputSchema)
-		.handler(async ({ context, input }) => {
+		.handler(({ context, input }) => {
 			if (!input.organizationId) {
 				throw rpcError.badRequest(
 					"Choose an organization to move this website to."
 				);
 			}
-			const targetOrganizationId = input.organizationId;
-
-			const website = await authorizeTransfer(context, {
-				resource: "website",
-				id: input.websiteId,
-				targetOrganizationId,
+			return transferWebsite(context, {
+				websiteId: input.websiteId,
+				targetOrganizationId: input.organizationId,
+				operation: "websites.transfer",
 			});
-
-			try {
-				const updated = await context.db.transaction(async (tx) => {
-					const updated = await websiteService.updateInTransaction(
-						tx,
-						input.websiteId,
-						{ organizationId: targetOrganizationId }
-					);
-					await Promise.all([
-						appendRpcAuditEvent(
-							context,
-							website.organizationId,
-							{
-								action: auditActions.WEBSITE_TRANSFERRED,
-								operation: "websites.transfer",
-								target: {
-									id: updated.id,
-									displayName: updated.name ?? updated.domain,
-								},
-								changes: {
-									organizationId: {
-										before: website.organizationId,
-										after: targetOrganizationId,
-									},
-								},
-								metadata: { transferDirection: "outbound" },
-							},
-							tx
-						),
-						appendRpcAuditEvent(
-							context,
-							targetOrganizationId,
-							{
-								action: auditActions.WEBSITE_TRANSFERRED,
-								operation: "websites.transfer",
-								target: {
-									id: updated.id,
-									displayName: updated.name ?? updated.domain,
-								},
-								changes: {
-									organizationId: {
-										before: website.organizationId,
-										after: targetOrganizationId,
-									},
-								},
-								metadata: { transferDirection: "inbound" },
-							},
-							tx
-						),
-					]);
-					return updated;
-				});
-				await websiteService.invalidateCachesAfterMutation({
-					before: website,
-					after: updated,
-				});
-				return updated;
-			} catch (error) {
-				handleServiceError(error);
-			}
 		}),
 
 	transferToOrganization: trackedProcedure
@@ -1266,73 +1310,13 @@ export const websitesRouter = {
 		})
 		.input(transferWebsiteToOrgSchema)
 		.output(websiteOutputSchema)
-		.handler(async ({ context, input }) => {
-			const website = await authorizeTransfer(context, {
-				resource: "website",
-				id: input.websiteId,
+		.handler(({ context, input }) =>
+			transferWebsite(context, {
+				websiteId: input.websiteId,
 				targetOrganizationId: input.targetOrganizationId,
-			});
-
-			try {
-				const updated = await context.db.transaction(async (tx) => {
-					const updated = await websiteService.updateInTransaction(
-						tx,
-						input.websiteId,
-						{ organizationId: input.targetOrganizationId }
-					);
-					await Promise.all([
-						appendRpcAuditEvent(
-							context,
-							website.organizationId,
-							{
-								action: auditActions.WEBSITE_TRANSFERRED,
-								operation: "websites.transferToOrganization",
-								target: {
-									id: updated.id,
-									displayName: updated.name ?? updated.domain,
-								},
-								changes: {
-									organizationId: {
-										before: website.organizationId,
-										after: input.targetOrganizationId,
-									},
-								},
-								metadata: { transferDirection: "outbound" },
-							},
-							tx
-						),
-						appendRpcAuditEvent(
-							context,
-							input.targetOrganizationId,
-							{
-								action: auditActions.WEBSITE_TRANSFERRED,
-								operation: "websites.transferToOrganization",
-								target: {
-									id: updated.id,
-									displayName: updated.name ?? updated.domain,
-								},
-								changes: {
-									organizationId: {
-										before: website.organizationId,
-										after: input.targetOrganizationId,
-									},
-								},
-								metadata: { transferDirection: "inbound" },
-							},
-							tx
-						),
-					]);
-					return updated;
-				});
-				await websiteService.invalidateCachesAfterMutation({
-					before: website,
-					after: updated,
-				});
-				return updated;
-			} catch (error) {
-				handleServiceError(error);
-			}
-		}),
+				operation: "websites.transferToOrganization",
+			})
+		),
 
 	isTrackingSetup: protectedProcedure
 		.route({
