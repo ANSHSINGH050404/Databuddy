@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { SciFiButton } from "@/components/landing/scifi-btn";
 import { SciFiCard } from "@/components/scifi-card";
-import { formatMoney } from "./estimator-utils";
+import { formatInteger, formatMoney } from "./estimator-utils";
 import { GatedFeaturePricingRows } from "./gated-feature-rows";
 import { trackPricingPlanClick } from "./track-pricing";
 import type { NormalizedPlan } from "./normalize";
@@ -29,7 +29,9 @@ export function PlansComparisonTable({ plans }: { plans: NormalizedPlan[] }) {
 			value: (plan: NormalizedPlan) =>
 				plan.id === "enterprise"
 					? "Custom"
-					: (plan.includedInvestigationsMonthly?.toLocaleString() ?? "—"),
+					: plan.includedInvestigationsMonthly == null
+						? "—"
+						: formatInteger(plan.includedInvestigationsMonthly),
 		},
 		{
 			name: "Extra investigations",
@@ -45,7 +47,7 @@ export function PlansComparisonTable({ plans }: { plans: NormalizedPlan[] }) {
 			value: (plan: NormalizedPlan) =>
 				plan.id === "enterprise"
 					? "Custom"
-					: plan.includedEventsMonthly.toLocaleString(),
+					: formatInteger(plan.includedEventsMonthly),
 		},
 		{
 			name: "AI credits",
@@ -53,9 +55,9 @@ export function PlansComparisonTable({ plans }: { plans: NormalizedPlan[] }) {
 				if (!plan.agentCredits) {
 					return "Custom";
 				}
-				const monthly = `${plan.agentCredits.month.toLocaleString()} / month`;
+				const monthly = `${formatInteger(plan.agentCredits.month)} / month`;
 				return plan.agentCredits.day
-					? `${monthly} + ${plan.agentCredits.day.toLocaleString()} / day`
+					? `${monthly} + ${formatInteger(plan.agentCredits.day)} / day`
 					: monthly;
 			},
 		},

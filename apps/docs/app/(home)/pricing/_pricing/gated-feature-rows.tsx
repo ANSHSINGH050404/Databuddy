@@ -12,6 +12,8 @@ import {
 import { CheckIcon, XMarkIcon as XIcon } from "@databuddy/ui/icons";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { formatInteger } from "./estimator-utils";
+
 const TABLE_PLAN_TO_SHARED: Record<string, PlanId> = {
 	free: PLAN_IDS.FREE,
 	hobby: PLAN_IDS.HOBBY,
@@ -65,7 +67,7 @@ function formatLimitCell(
 	const unit = meta.unit;
 	return (
 		<div className="flex flex-col items-center gap-0.5">
-			<span className="tabular-nums">{limit.toLocaleString()}</span>
+			<span className="tabular-nums">{formatInteger(limit)}</span>
 			{unit ? (
 				<span className="text-muted-foreground text-xs">{unit}</span>
 			) : null}

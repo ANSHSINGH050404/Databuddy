@@ -1,5 +1,7 @@
+const NUMBER_LOCALE = "en-US";
+
 export function formatMoney(value: number): string {
-	return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+	return `$${value.toLocaleString(NUMBER_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function formatTierRate(amount: number): string {
@@ -10,11 +12,11 @@ export function formatTierRate(amount: number): string {
 }
 
 export function formatInteger(value: number): string {
-	return value.toLocaleString();
+	return value.toLocaleString(NUMBER_LOCALE);
 }
 
 export function formatCompact(value: number): string {
-	return new Intl.NumberFormat(undefined, {
+	return new Intl.NumberFormat(NUMBER_LOCALE, {
 		notation: "compact",
 		maximumFractionDigits: 1,
 	}).format(value);

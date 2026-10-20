@@ -337,14 +337,14 @@ export function Estimator({ plans }: Props) {
 											const to =
 												tier.to === "inf"
 													? "∞"
-													: Number(tier.to).toLocaleString();
+													: formatInteger(Number(tier.to));
 											return (
 												<tr
 													className="border-border border-t"
 													key={`${tier.to}`}
 												>
 													<td className="px-3 py-2 text-foreground text-xs">
-														{from.toLocaleString()}
+														{formatInteger(from)}
 													</td>
 													<td className="px-3 py-2 text-foreground text-xs">
 														{to}
