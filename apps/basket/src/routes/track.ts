@@ -276,6 +276,29 @@ function parseVercelLogs(body: Uint8Array): {
 	return { entries, malformed };
 }
 
+const CLAIM_VERCEL_REQUEST_SCRIPT = `
+-- claim-vercel-request
+local current = redis.call("GET", KEYS[1])
+if current and not (ARGV[3] == "1" and string.sub(current, 1, 2) == "0:") then
+	return 0
+end
+redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
+return 1
+`;
+
+const RELEASE_VERCEL_REQUEST_SCRIPT = `
+-- release-vercel-request
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+	return 0
+end
+return redis.call("DEL", KEYS[1])
+`;
+
+interface VercelRequestClaim {
+	key: string;
+	value: string;
+}
+
 function isServedStatus(status: number): boolean {
 	return status === 0 || status === 304 || (status >= 200 && status < 300);
 }
@@ -283,28 +306,39 @@ function isServedStatus(status: number): boolean {
 async function claimVercelRequest(
 	websiteId: string,
 	requestKey: string,
-	status: number
-): Promise<string | null> {
+	status: number,
+	owner: string
+): Promise<VercelRequestClaim | null> {
 	if (requestKey === "") {
-		return "";
+		return { key: "", value: "" };
 	}
 	const key = `vercel-drain-request:${websiteId}:${createHash("sha256").update(requestKey).digest("base64url")}`;
-	const value = String(status);
+	const value = `${status}:${owner}`;
 	try {
-		if (
-			(await redis.set(key, value, "EX", VERCEL_REQUEST_TTL_SECONDS, "NX")) ===
-			"OK"
-		) {
-			return key;
-		}
-		if (isServedStatus(status) || (await redis.get(key)) !== "0") {
-			return null;
-		}
-		await redis.set(key, value, "EX", VERCEL_REQUEST_TTL_SECONDS, "XX");
-		return key;
+		const claimed = await redis.eval(
+			CLAIM_VERCEL_REQUEST_SCRIPT,
+			1,
+			key,
+			value,
+			VERCEL_REQUEST_TTL_SECONDS,
+			isServedStatus(status) ? "0" : "1"
+		);
+		return claimed === 1 ? { key, value } : null;
 	} catch {
-		return "";
+		return { key: "", value: "" };
 	}
+}
+
+async function releaseVercelRequests(
+	claims: VercelRequestClaim[]
+): Promise<void> {
+	await Promise.all(
+		claims
+			.filter((claim) => claim.key !== "")
+			.map((claim) =>
+				redis.eval(RELEASE_VERCEL_REQUEST_SCRIPT, 1, claim.key, claim.value)
+			)
+	);
 }
 
 async function loadHostCheck(websiteId: string) {
@@ -914,28 +948,29 @@ export const vercelDrainRoute = new Elysia().post(
 				spanKeys.push(requestKey ?? "");
 			}
 
+			const owner = crypto.randomUUID();
 			const claims = await Promise.all(
 				spans.map((span, index) =>
 					claimVercelRequest(
 						websiteId,
-						spanKeys[index] ?? "",
-						span.status_code ?? 0
+						spanKeys.at(index) ?? "",
+						span.status_code ?? 0,
+						owner
 					)
 				)
 			);
-			const fresh = spans.filter((_, index) => claims[index] !== null);
+			const fresh = spans.filter((_, index) => claims.at(index) !== null);
 			if (fresh.length > 0) {
-				await runPromise(sendBatch("analytics-ai-traffic-spans", fresh)).catch(
-					async (error: unknown) => {
-						const claimed = claims.filter((key): key is string => Boolean(key));
-						if (claimed.length > 0) {
-							await redis.del(...claimed).catch(() => {
-								log.set({ vercel_claim_release: "failed" });
-							});
-						}
-						throw error;
-					}
-				);
+				try {
+					await runPromise(sendBatch("analytics-ai-traffic-spans", fresh));
+				} catch (error) {
+					await releaseVercelRequests(
+						claims.filter((claim) => claim !== null)
+					).catch(() => {
+						log.set({ vercel_claim_release: "failed" });
+					});
+					throw error;
+				}
 			}
 			log.set({
 				vercel: {
