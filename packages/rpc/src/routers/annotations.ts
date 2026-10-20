@@ -262,7 +262,7 @@ export const annotationsRouter = {
 	update: trackedProcedure
 		.route({
 			description:
-				"Updates an annotation. Users can only update their own unless they own the website.",
+				"Updates an annotation. Members can update their own annotations; owners, admins and API keys can update any.",
 			method: "POST",
 			path: "/annotations/update",
 			summary: "Update annotation",
@@ -279,26 +279,36 @@ export const annotationsRouter = {
 		)
 		.output(annotationOutputSchema)
 		.handler(async ({ context, input }) => {
-			const [annotation] = await context.db
-				.select()
-				.from(annotations)
-				.where(and(eq(annotations.id, input.id), isNull(annotations.deletedAt)))
-				.limit(1);
+			const annotation = await context.db.query.annotations.findFirst({
+				where: { id: input.id, deletedAt: { isNull: true } },
+				columns: { websiteId: true, createdBy: true },
+			});
 
 			if (!annotation) {
 				throw rpcError.notFound("annotation", input.id);
 			}
 
-			await withWorkspace(context, {
+			const workspace = await withWorkspace(context, {
 				websiteId: annotation.websiteId,
 				permissions: ["update"],
 			});
+
+			if (
+				workspace.user &&
+				workspace.user.id !== annotation.createdBy &&
+				workspace.role !== "owner" &&
+				workspace.role !== "admin"
+			) {
+				throw rpcError.forbidden(
+					"Only the person who added this annotation, or an owner or admin, can edit it."
+				);
+			}
 
 			const { id, ...updates } = input;
 			const [updatedAnnotation] = await context.db
 				.update(annotations)
 				.set({ ...updates, updatedAt: new Date() })
-				.where(eq(annotations.id, id))
+				.where(and(eq(annotations.id, id), isNull(annotations.deletedAt)))
 				.returning();
 
 			if (!updatedAnnotation) {
@@ -313,7 +323,7 @@ export const annotationsRouter = {
 	delete: trackedProcedure
 		.route({
 			description:
-				"Soft-deletes an annotation. Users can only delete their own unless they own the website.",
+				"Soft-deletes an annotation. Requires website delete permission.",
 			method: "POST",
 			path: "/annotations/delete",
 			summary: "Delete annotation",
@@ -322,11 +332,10 @@ export const annotationsRouter = {
 		.input(z.object({ id: z.string() }))
 		.output(successOutputSchema)
 		.handler(async ({ context, input }) => {
-			const [annotation] = await context.db
-				.select()
-				.from(annotations)
-				.where(and(eq(annotations.id, input.id), isNull(annotations.deletedAt)))
-				.limit(1);
+			const annotation = await context.db.query.annotations.findFirst({
+				where: { id: input.id, deletedAt: { isNull: true } },
+				columns: { websiteId: true },
+			});
 
 			if (!annotation) {
 				throw rpcError.notFound("annotation", input.id);

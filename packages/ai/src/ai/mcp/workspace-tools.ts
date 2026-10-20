@@ -181,7 +181,7 @@ const updateAnnotationTool = defineMcpTool(
 				.boolean()
 				.optional()
 				.describe(
-					"true shows the annotation to everyone in the organization; false keeps it private to its creator."
+					"true also shows the annotation on the website's public dashboard; false shows it only to organization members."
 				),
 			confirmed: ConfirmedSchema,
 		}),
