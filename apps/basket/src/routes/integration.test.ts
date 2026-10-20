@@ -24,9 +24,8 @@ const {
 	mockGetWebsiteByIdV2,
 	mockResolveApiKeyOwnerId,
 	mockDenyApiKeyWebsiteAccess,
-	mockRedisDel,
+	mockRedisEval,
 	mockRedisExists,
-	mockRedisGet,
 	mockRedisSet,
 	apiKeyDenialErrors,
 } = vi.hoisted(() => {
@@ -49,12 +48,11 @@ const {
 	return {
 		mockDenyApiKeyWebsiteAccess: vi.fn((): string | null => null),
 		mockRedisExists: vi.fn((_key: string) => Promise.resolve(0)),
-		mockRedisSet: vi.fn(
-			(_key: string, _value: string, ..._options: unknown[]) =>
-				Promise.resolve<string | null>("OK")
+		mockRedisSet: vi.fn(() => Promise.resolve("OK")),
+		mockRedisEval: vi.fn(
+			(_script: string, _keys: number, ..._args: (string | number)[]) =>
+				Promise.resolve(1)
 		),
-		mockRedisGet: vi.fn((_key: string) => Promise.resolve<string | null>(null)),
-		mockRedisDel: vi.fn((..._keys: string[]) => Promise.resolve(0)),
 		apiKeyDenialErrors: {} as Record<string, () => Error>,
 		noop,
 		noopAsync,
@@ -187,12 +185,7 @@ vi.mock("@lib/api-key", () => ({
 }));
 
 vi.mock("@databuddy/redis/redis", () => ({
-	redis: {
-		del: mockRedisDel,
-		exists: mockRedisExists,
-		get: mockRedisGet,
-		set: mockRedisSet,
-	},
+	redis: { eval: mockRedisEval, exists: mockRedisExists, set: mockRedisSet },
 }));
 
 vi.mock("@hooks/auth", () => ({
@@ -1944,9 +1937,7 @@ describe("POST /vercel/:websiteId", () => {
 
 	afterEach(() => {
 		vi.mocked(isOriginAllowed).mockImplementation(() => true);
-		vi.mocked(mockRedisSet).mockImplementation(() => Promise.resolve("OK"));
-		vi.mocked(mockRedisGet).mockImplementation(() => Promise.resolve(null));
-		vi.mocked(mockRedisDel).mockImplementation(() => Promise.resolve(0));
+		vi.mocked(mockRedisEval).mockImplementation(() => Promise.resolve(1));
 	});
 
 	function logLine(
@@ -2048,24 +2039,19 @@ describe("POST /vercel/:websiteId", () => {
 
 	function fakeRedis() {
 		const store = new Map<string, string>();
-		vi.mocked(mockRedisSet).mockImplementation((key, value, ...options) => {
-			if (
-				(options.includes("NX") && store.has(key)) ||
-				(options.includes("XX") && !store.has(key))
-			) {
-				return Promise.resolve(null);
+		vi.mocked(mockRedisEval).mockImplementation((script, _keys, ...args) => {
+			const [key, value, , upgrade] = args.map(String);
+			const current = store.get(key ?? "");
+			if (script.includes("release-vercel-request")) {
+				return Promise.resolve(
+					current === value && store.delete(key ?? "") ? 1 : 0
+				);
 			}
-			store.set(key, value);
-			return Promise.resolve("OK");
-		});
-		vi.mocked(mockRedisGet).mockImplementation((key) =>
-			Promise.resolve(store.get(key) ?? null)
-		);
-		vi.mocked(mockRedisDel).mockImplementation((...keys) => {
-			for (const key of keys) {
-				store.delete(key);
+			if (current && !(upgrade === "1" && current.startsWith("0:"))) {
+				return Promise.resolve(0);
 			}
-			return Promise.resolve(keys.length);
+			store.set(key ?? "", value ?? "");
+			return Promise.resolve(1);
 		});
 	}
 
@@ -2082,7 +2068,7 @@ describe("POST /vercel/:websiteId", () => {
 		expect(storedSpans()).toHaveLength(2);
 
 		vi.mocked(mockSendBatch).mockClear();
-		vi.mocked(mockRedisSet).mockImplementation(() =>
+		vi.mocked(mockRedisEval).mockImplementation(() =>
 			Promise.reject(new Error("connection refused"))
 		);
 		expect((await drain(body)).status).toBe(200);
@@ -2094,9 +2080,10 @@ describe("POST /vercel/:websiteId", () => {
 		const middleware = logLine(CLAUDE_CODE, { statusCode: undefined });
 		const notFound = logLine(CLAUDE_CODE, { statusCode: 404 });
 		const served = logLine(CLAUDE_CODE, { statusCode: 200 });
-		for (const line of [middleware, notFound, served]) {
-			expect((await drain(JSON.stringify([line]))).status).toBe(200);
-		}
+		expect((await drain(JSON.stringify([middleware]))).status).toBe(200);
+		expect((await drain(JSON.stringify([notFound]))).status).toBe(200);
+		expect((await drain(JSON.stringify([notFound]))).status).toBe(200);
+		expect((await drain(JSON.stringify([served]))).status).toBe(200);
 		expect(mockSendBatch).toHaveBeenCalledTimes(2);
 		expect(spansFromCall(0)).toEqual([
 			expect.objectContaining({ status_code: 0 }),
