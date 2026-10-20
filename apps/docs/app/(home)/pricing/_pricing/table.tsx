@@ -26,12 +26,15 @@ export function PlansComparisonTable({ plans }: { plans: NormalizedPlan[] }) {
 		},
 		{
 			name: "Investigations / month",
-			value: (plan: NormalizedPlan) =>
-				plan.id === "enterprise"
-					? "Custom"
-					: plan.includedInvestigationsMonthly == null
-						? "—"
-						: formatInteger(plan.includedInvestigationsMonthly),
+			value: (plan: NormalizedPlan) => {
+				if (plan.id === "enterprise") {
+					return "Custom";
+				}
+				if (plan.includedInvestigationsMonthly === null) {
+					return "—";
+				}
+				return formatInteger(plan.includedInvestigationsMonthly);
+			},
 		},
 		{
 			name: "Extra investigations",
