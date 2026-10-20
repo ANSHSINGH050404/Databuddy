@@ -132,6 +132,10 @@ export const contents: SidebarSection[] = [
 						title: "Mintlify",
 						href: "/docs/Integrations/mintlify",
 					},
+					{
+						title: "Notra",
+						href: "/docs/Integrations/notra",
+					},
 				],
 			},
 			{
