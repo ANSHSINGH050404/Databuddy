@@ -12,13 +12,15 @@ import { StructuredData } from "@/components/structured-data";
 import { GET as robots } from "@/app/robots.txt/route";
 import { createComparisonMarkdown, competitors } from "./comparison-config";
 
+const CRLF_PATTERN = /\r\n/g;
+
 describe("public copy contracts", () => {
 	it("emits GTM readiness only after the documented loader succeeds", async () => {
 		const guide = await readFile(
 			join(import.meta.dir, "..", "content", "docs", "Integrations", "gtm.mdx"),
 			"utf8"
 		);
-		const normalizedGuide = guide.replace(/\r\n/g, "\n");
+		const normalizedGuide = guide.replace(CRLF_PATTERN, "\n");
 		const loader = normalizedGuide
 			.split("```html\n<script>\n")[1]
 			?.split("</script>")[0];
