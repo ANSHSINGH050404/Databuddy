@@ -697,8 +697,10 @@ describe("POST /batch", () => {
 
 		expect(res.status).toBe(200);
 		expect(mockInsertOutgoingLinksBatch).toHaveBeenCalledOnce();
-		const [batchEvents] = mockInsertOutgoingLinksBatch.mock.calls[0];
-		expect(batchEvents[0].event.href).toBe(
+		const batchEvents = mockInsertOutgoingLinksBatch.mock.calls.at(0)?.at(0);
+		expect(batchEvents).toBeDefined();
+		const batchEvent = batchEvents?.at(0);
+		expect(batchEvent?.event.href).toBe(
 			"https://partner.example/click?a=1&b=2&token=REDACTED"
 		);
 	});
@@ -717,8 +719,10 @@ describe("POST /batch", () => {
 
 		expect(res.status).toBe(200);
 		expect(mockInsertOutgoingLinksBatch).toHaveBeenCalledOnce();
-		const [batchEvents] = mockInsertOutgoingLinksBatch.mock.calls[0];
-		expect(batchEvents[0].event.href).toBe(
+		const batchEvents = mockInsertOutgoingLinksBatch.mock.calls.at(0)?.at(0);
+		expect(batchEvents).toBeDefined();
+		const batchEvent = batchEvents?.at(0);
+		expect(batchEvent?.event.href).toBe(
 			"https://partner.example/#/checkout?token=REDACTED&step=2"
 		);
 	});
