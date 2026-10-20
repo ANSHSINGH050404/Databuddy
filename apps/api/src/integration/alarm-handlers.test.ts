@@ -114,4 +114,17 @@ describe("alarms website ownership", () => {
 			expect(unlinked.websiteId).toBeNull();
 		}
 	);
+
+	iit("lets an admin delete an alarm", async () => {
+		const { context, org, website } = await workspace();
+		const alarm = await createAlarm(context, org.id, website.id);
+		const admin = await signUp();
+		await addToOrganization(admin.id, org.id, "admin");
+
+		await expect(
+			createProcedureClient(appRouter.alarms.delete, {
+				context: userContext(admin, org.id),
+			})({ alarmId: alarm.id })
+		).resolves.toEqual({ success: true });
+	});
 });

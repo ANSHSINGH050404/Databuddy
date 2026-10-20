@@ -437,7 +437,7 @@ export const alarmsRouter = {
 			await withResource(context, {
 				resource: "alarm",
 				id: input.alarmId,
-				permissions: ["delete"],
+				permissions: ["update"],
 			});
 			await db.delete(alarms).where(eq(alarms.id, input.alarmId));
 			return { success: true };
