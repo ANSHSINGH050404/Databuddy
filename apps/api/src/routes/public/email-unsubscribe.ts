@@ -1,8 +1,10 @@
 import { mergeWideEvent } from "@databuddy/ai/lib/tracing";
 import {
 	db,
+	EMAIL_UNSUBSCRIBE_TOPICS,
+	type EmailUnsubscribeTopic,
 	eq,
-	isAiDigestUnsubscribeToken,
+	isEmailUnsubscribeToken,
 	mergeEmailNotificationSettings,
 	organization,
 } from "@databuddy/db";
@@ -10,14 +12,47 @@ import { config } from "@databuddy/env/app";
 import { escapeHTML } from "bun";
 import { Elysia, t } from "elysia";
 
+const unsubscribeParams = t.Object({
+	topic: t.UnionEnum(
+		Object.keys(EMAIL_UNSUBSCRIBE_TOPICS) as [
+			EmailUnsubscribeTopic,
+			...EmailUnsubscribeTopic[],
+		]
+	),
+});
+
 const unsubscribeQuery = t.Object({
 	organization: t.String({ maxLength: 128, minLength: 1 }),
 	token: t.String({ maxLength: 128, minLength: 1 }),
 });
 
-function isValidToken(organizationId: string, token: string): boolean {
+const TOPIC_COPY: Record<
+	EmailUnsubscribeTopic,
+	{ name: string; scope: string }
+> = {
+	"ai-digest": {
+		name: "the weekly AI digest",
+		scope: "for every website in this organization",
+	},
+	"tracking-health": {
+		name: "tracking alerts",
+		scope: "for every website in this organization",
+	},
+	"usage-warnings": {
+		name: "usage warnings",
+		scope: "for this organization",
+	},
+};
+
+function isValidToken(
+	topic: EmailUnsubscribeTopic,
+	organizationId: string,
+	token: string
+): boolean {
 	const secret = process.env.DATABUDDY_ENCRYPTION_KEY;
-	return !!secret && isAiDigestUnsubscribeToken(organizationId, token, secret);
+	return (
+		!!secret && isEmailUnsubscribeToken(topic, organizationId, token, secret)
+	);
 }
 
 function emailSettingsLink(organizationId: string): string {
@@ -63,11 +98,14 @@ function htmlPage(status: number, title: string, content: string): Response {
 	);
 }
 
-function invalidLinkPage(organizationId: string): Response {
+function invalidLinkPage(
+	topic: EmailUnsubscribeTopic,
+	organizationId: string
+): Response {
 	return htmlPage(
 		403,
 		"This link is not valid",
-		`<p>Turn off the weekly AI digest in ${emailSettingsLink(organizationId)} instead.</p>`
+		`<p>Turn off ${TOPIC_COPY[topic].name} in ${emailSettingsLink(organizationId)} instead.</p>`
 	);
 }
 
@@ -75,22 +113,23 @@ export const emailUnsubscribeRoute = new Elysia({
 	prefix: "/v1/email-unsubscribe",
 })
 	.get(
-		"/ai-digest",
-		function confirmAiDigestUnsubscribe({ query }) {
+		"/:topic",
+		function confirmUnsubscribe({ params, query }) {
 			mergeWideEvent({
-				email_unsubscribe_page: "ai_digest",
+				email_unsubscribe_page: params.topic,
 				email_unsubscribe_organization: query.organization,
 			});
 
-			if (!isValidToken(query.organization, query.token)) {
+			if (!isValidToken(params.topic, query.organization, query.token)) {
 				mergeWideEvent({ email_unsubscribe_rejected: "invalid_token" });
-				return invalidLinkPage(query.organization);
+				return invalidLinkPage(params.topic, query.organization);
 			}
 
+			const copy = TOPIC_COPY[params.topic];
 			return htmlPage(
 				200,
-				"Unsubscribe from the weekly AI digest?",
-				`<p>The weekly AI digest stops for every site in this organization.</p>
+				`Unsubscribe from ${copy.name}?`,
+				`<p>Emails for ${copy.name} stop ${copy.scope}.</p>
     <form method="post">
       <input type="hidden" name="List-Unsubscribe" value="One-Click">
       <button type="submit">Unsubscribe</button>
@@ -98,21 +137,21 @@ export const emailUnsubscribeRoute = new Elysia({
     <p>Manage your other emails in ${emailSettingsLink(query.organization)}.</p>`
 			);
 		},
-		{ query: unsubscribeQuery }
+		{ params: unsubscribeParams, query: unsubscribeQuery }
 	)
 	.post(
-		"/ai-digest",
-		async function unsubscribeFromAiDigest({ query, request, set }) {
+		"/:topic",
+		async function unsubscribe({ params, query, request, set }) {
 			mergeWideEvent({
-				email_unsubscribe: "ai_digest",
+				email_unsubscribe: params.topic,
 				email_unsubscribe_organization: query.organization,
 			});
 			const wantsHtml = request.headers.get("accept")?.includes("text/html");
 
-			if (!isValidToken(query.organization, query.token)) {
+			if (!isValidToken(params.topic, query.organization, query.token)) {
 				mergeWideEvent({ email_unsubscribe_rejected: "invalid_token" });
 				if (wantsHtml) {
-					return invalidLinkPage(query.organization);
+					return invalidLinkPage(params.topic, query.organization);
 				}
 				set.status = 403;
 				return { success: false };
@@ -121,21 +160,23 @@ export const emailUnsubscribeRoute = new Elysia({
 			await db
 				.update(organization)
 				.set({
-					emailNotifications: mergeEmailNotificationSettings({
-						aiAgents: { weeklyDigest: false },
-					}),
+					emailNotifications: mergeEmailNotificationSettings(
+						EMAIL_UNSUBSCRIBE_TOPICS[params.topic]
+					),
 				})
 				.where(eq(organization.id, query.organization));
+			const copy = TOPIC_COPY[params.topic];
 			return wantsHtml
 				? htmlPage(
 						200,
 						"You are unsubscribed",
-						`<p>The weekly AI digest is off for every website in this organization. Turn it back on any time in ${emailSettingsLink(query.organization)}.</p>`
+						`<p>Emails for ${copy.name} are off ${copy.scope}. Turn them back on any time in ${emailSettingsLink(query.organization)}.</p>`
 					)
 				: { success: true };
 		},
 		{
 			body: t.Object({ "List-Unsubscribe": t.Literal("One-Click") }),
+			params: unsubscribeParams,
 			query: unsubscribeQuery,
 		}
 	);

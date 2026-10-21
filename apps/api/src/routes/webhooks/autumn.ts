@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import {
 	and,
 	db,
+	type EmailUnsubscribeLinks,
+	emailUnsubscribeLinks,
 	eq,
 	gt,
 	isNull,
@@ -318,11 +320,22 @@ function usagePercentage(snapshot: UsageSnapshot): number | null {
 	return Math.round((snapshot.usage / snapshot.granted) * 100);
 }
 
+function usageEmailLinks(organizationId: string): EmailUnsubscribeLinks {
+	return emailUnsubscribeLinks({
+		apiUrl: config.urls.api,
+		dashboardUrl: config.urls.dashboard,
+		organizationId,
+		secret: process.env.DATABUDDY_ENCRYPTION_KEY,
+		topic: "usage-warnings",
+	});
+}
+
 export async function sendAlertEmail(opts: {
 	customerId: string;
 	cooldownKey: string;
 	alertType: string;
 	idempotencyKey?: string;
+	links: EmailUnsubscribeLinks;
 	organizationId: string;
 	subject: string;
 	react: React.ReactElement;
@@ -334,6 +347,7 @@ export async function sendAlertEmail(opts: {
 		cooldownKey,
 		alertType,
 		idempotencyKey,
+		links,
 		organizationId,
 		subject,
 		react,
@@ -405,6 +419,7 @@ export async function sendAlertEmail(opts: {
 			subject,
 			html,
 			text,
+			headers: links.headers,
 		};
 		const result = idempotencyKey
 			? await resend.emails.send(message, { idempotencyKey })
@@ -508,12 +523,14 @@ export async function handleLimitReached(
 			? `[Action required] ${feature.name}: ${heading}`
 			: `${feature.name}: ${heading}`;
 	mergeWideEvent({ customer_id, feature_id, limit_type });
+	const links = usageEmailLinks(organization.id);
 
 	return sendAlertEmail({
 		customerId: customer_id,
 		cooldownKey: `${feature_id}:limit:${limit_type}`,
 		alertType: limit_type,
 		idempotencyKey,
+		links,
 		organizationId: organization.id,
 		subject,
 		react: UsageLimitEmail({
@@ -526,6 +543,7 @@ export async function handleLimitReached(
 			organizationName: organization?.name,
 			overageAllowed: snapshot.overageAllowed,
 			pausedActivity: feature.pausedActivity,
+			preferences: links,
 			remainingAmount: snapshot.remaining,
 			usageAmount: snapshot.usage,
 			usageUnit: feature.unit,
@@ -582,12 +600,14 @@ export async function handleUsageAlert(
 		usage_alert_threshold: usage_alert.threshold,
 		usage_alert_type: usage_alert.threshold_type,
 	});
+	const links = usageEmailLinks(organization.id);
 
 	return sendAlertEmail({
 		customerId: customer_id,
 		cooldownKey: `${feature_id}:alert:${usage_alert.threshold_type}:${usage_alert.threshold}`,
 		alertType: `usage_alert_${usage_alert.threshold_type}`,
 		idempotencyKey,
+		links,
 		organizationId: organization.id,
 		subject,
 		react: UsageAlertEmail({
@@ -598,6 +618,7 @@ export async function handleUsageAlert(
 			organizationName: organization?.name,
 			overageAllowed: snapshot.overageAllowed,
 			pausedActivity: feature.pausedActivity,
+			preferences: links,
 			remainingAmount: snapshot.remaining,
 			usageAmount: snapshot.usage,
 			usageUnit: feature.unit,

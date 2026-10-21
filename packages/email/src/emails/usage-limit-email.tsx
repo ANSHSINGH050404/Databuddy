@@ -2,6 +2,7 @@ import { EVENTS_USAGE } from "@databuddy/shared/billing";
 import { Heading, Link, Section, Text } from "@react-email/components";
 import { emailBrand } from "./email-brand";
 import { EmailButton } from "./email-button";
+import type { EmailPreferenceLinks } from "./email-footer";
 import { EmailLayout } from "./email-layout";
 import { formatResetDate, formatUsageNumber } from "./usage-email-utils";
 
@@ -17,6 +18,7 @@ export interface UsageLimitEmailProps {
 	organizationName?: string;
 	overageAllowed: boolean;
 	pausedActivity: string;
+	preferences?: EmailPreferenceLinks;
 	remainingAmount: number;
 	usageAmount: number;
 	usageUnit: string;
@@ -64,6 +66,7 @@ export const UsageLimitEmail = ({
 	organizationName,
 	overageAllowed,
 	pausedActivity,
+	preferences,
 	remainingAmount,
 	usageAmount,
 	usageUnit,
@@ -93,6 +96,7 @@ export const UsageLimitEmail = ({
 
 	return (
 		<EmailLayout
+			preferences={preferences}
 			preview={`${featureName}${context}: ${usage} of ${limit} ${usageUnit} used. ${accessStatus}`}
 			tagline="Usage limit notice"
 		>

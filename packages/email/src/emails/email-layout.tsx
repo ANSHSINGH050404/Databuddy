@@ -8,17 +8,19 @@ import {
 	Tailwind,
 } from "@react-email/components";
 import { emailBrand } from "./email-brand";
-import { EmailFooter } from "./email-footer";
+import { EmailFooter, type EmailPreferenceLinks } from "./email-footer";
 import { EmailHeader } from "./email-header";
 import { emailTailwindConfig } from "./tailwind.config";
 
 interface EmailLayoutProps {
 	children: React.ReactNode;
+	preferences?: EmailPreferenceLinks;
 	preview: string;
 	tagline?: string;
 }
 
 export const EmailLayout = ({
+	preferences,
 	preview,
 	tagline,
 	children,
@@ -49,7 +51,7 @@ export const EmailLayout = ({
 					>
 						{children}
 					</Section>
-					<EmailFooter />
+					<EmailFooter preferences={preferences} />
 				</Container>
 			</Body>
 		</Tailwind>

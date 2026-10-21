@@ -1,12 +1,41 @@
 import { Hr, Link, Section, Text } from "@react-email/components";
 import { emailBrand } from "./email-brand";
 
-export const EmailFooter = () => (
+export interface EmailPreferenceLinks {
+	settingsUrl: string;
+	unsubscribeUrl?: string | null;
+}
+
+const linkStyle = { color: emailBrand.muted, textDecoration: "underline" };
+
+export const EmailFooter = ({
+	preferences,
+}: {
+	preferences?: EmailPreferenceLinks;
+}) => (
 	<Section className="mt-8">
 		<Hr
 			className="border-border border-solid"
 			style={{ borderColor: emailBrand.border }}
 		/>
+		{preferences ? (
+			<Text
+				className="m-0 mb-2 text-center text-xs"
+				style={{ color: emailBrand.muted }}
+			>
+				<Link href={preferences.settingsUrl} style={linkStyle}>
+					Email settings
+				</Link>
+				{preferences.unsubscribeUrl ? (
+					<>
+						{" · "}
+						<Link href={preferences.unsubscribeUrl} style={linkStyle}>
+							Unsubscribe
+						</Link>
+					</>
+				) : null}
+			</Text>
+		) : null}
 		<Text
 			className="m-0 mb-2 text-center text-xs"
 			style={{ color: emailBrand.muted }}
