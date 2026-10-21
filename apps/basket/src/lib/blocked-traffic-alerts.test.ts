@@ -198,12 +198,29 @@ describe("blocked traffic alert rules", () => {
 		).toEqual({ kind: "blocked_spike", severity: "warning" });
 	});
 
+	test("checks every count past the spike floor so a raised floor is not skipped", () => {
+		const previousBlocked = 20;
+		const firstAlertingCount = Array.from(
+			{ length: 100 },
+			(_, i) => i + 1
+		).find(
+			(count) =>
+				shouldEvaluateBlockedTrafficAlert(count) &&
+				decideBlockedTrafficAlert({
+					baselineEvents: 0,
+					count,
+					previousBlocked,
+					silenceMinutes: 0,
+				}) !== null
+		);
+		expect(firstAlertingCount).toBe(60);
+	});
+
 	test("continues checking spikes after the first spike threshold", () => {
 		expect(shouldEvaluateBlockedTrafficAlert(3)).toBe(true);
 		expect(shouldEvaluateBlockedTrafficAlert(4)).toBe(false);
 		expect(shouldEvaluateBlockedTrafficAlert(24)).toBe(false);
 		expect(shouldEvaluateBlockedTrafficAlert(25)).toBe(true);
-		expect(shouldEvaluateBlockedTrafficAlert(26)).toBe(false);
 		expect(shouldEvaluateBlockedTrafficAlert(50)).toBe(true);
 		expect(shouldEvaluateBlockedTrafficAlert(75)).toBe(true);
 	});
