@@ -166,7 +166,7 @@ export const RetentionBuilders = {
 			}
 			const scope = ctx.filterParams?.__orgLevel
 				? "owner_id = {projectId:String}"
-				: "(owner_id = {projectId:String} OR website_id = {projectId:String})";
+				: "website_id = {projectId:String}";
 			return {
 				params: {
 					projectId: ctx.websiteId,

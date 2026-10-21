@@ -151,6 +151,9 @@ export function agentTenantFilter(table: string, value: string): string {
 	if (!column) {
 		throw new Error(`${table} is not an agent table.`);
 	}
+	if (table === "analytics.custom_events") {
+		return `website_id = ${value}`;
+	}
 	return column === "owner_id"
 		? `(owner_id = ${value} OR website_id = ${value})`
 		: `${column} = ${value}`;

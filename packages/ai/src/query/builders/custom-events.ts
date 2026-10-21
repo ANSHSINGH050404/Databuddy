@@ -9,10 +9,12 @@ function customEventsScope(
 ): string {
 	// Org-level: owner_id is always the organizationId at ingestion, so a
 	// primary-key scan on owner_id alone covers all events for the org.
-	// Website-level: match either owner_id or website_id (bloom-filter indexed).
+	// Website-level: website_id alone, which the bloom filter prunes. An OR with
+	// owner_id disables both the primary key and the index and scans the table;
+	// no row has ever carried a website id in owner_id.
 	const owner = filterParams?.__orgLevel
 		? "owner_id = {projectId:String}"
-		: "(owner_id = {projectId:String} OR website_id = {projectId:String})";
+		: "website_id = {projectId:String}";
 	return `${owner}
 		AND timestamp >= toDateTime({startDate:String})
 		AND timestamp <= toDateTime(concat({endDate:String}, ' 23:59:59'))
