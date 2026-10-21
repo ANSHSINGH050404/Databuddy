@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+	blockedTrafficAlertKeys,
 	decideBlockedTrafficAlert,
 	matchesTrackingAlertIgnoredOrigin,
 	requireBlockedTrafficEmailApiKey,
@@ -81,24 +82,32 @@ describe("blocked traffic alert rules", () => {
 		).toBe(false);
 	});
 
-	test("alerts critical when tracking is zero but the site had baseline traffic", () => {
+	test("alerts critical when a busy site goes silent while its requests are blocked", () => {
+		expect(
+			decideBlockedTrafficAlert({
+				baselineEvents: 3360,
+				count: 3,
+				previousBlocked: 0,
+				silenceMinutes: 30,
+			})
+		).toEqual({ kind: "tracking_zero", severity: "critical" });
+	});
+
+	test("does not call a quiet small site down", () => {
 		expect(
 			decideBlockedTrafficAlert({
 				baselineEvents: 5,
 				count: 3,
 				previousBlocked: 0,
-				recentEvents: 0,
+				silenceMinutes: 30,
 			})
-		).toEqual({ kind: "tracking_zero", severity: "critical" });
-	});
-
-	test("does not alert tracking-zero for new or already-working sites", () => {
+		).toBeNull();
 		expect(
 			decideBlockedTrafficAlert({
-				baselineEvents: 4,
+				baselineEvents: 50,
 				count: 3,
 				previousBlocked: 0,
-				recentEvents: 0,
+				silenceMinutes: 24 * 60,
 			})
 		).toBeNull();
 		expect(
@@ -106,8 +115,56 @@ describe("blocked traffic alert rules", () => {
 				baselineEvents: 100,
 				count: 3,
 				previousBlocked: 0,
-				recentEvents: 1,
+				silenceMinutes: 24 * 60,
 			})
+		).toEqual({ kind: "tracking_zero", severity: "critical" });
+	});
+
+	test("does not alert tracking-zero while page views are still arriving", () => {
+		expect(
+			decideBlockedTrafficAlert({
+				baselineEvents: 100_000,
+				count: 3,
+				previousBlocked: 0,
+				silenceMinutes: 5,
+			})
+		).toBeNull();
+		expect(
+			decideBlockedTrafficAlert({
+				baselineEvents: 0,
+				count: 3,
+				previousBlocked: 0,
+				silenceMinutes: 0,
+			})
+		).toBeNull();
+	});
+
+	test("one outage maps to one incident key across origins and reasons", () => {
+		const first = blockedTrafficAlertKeys({
+			clientId: "site_1",
+			kind: "tracking_zero",
+			lastSeen: 1_792_000_000,
+		});
+		expect(
+			blockedTrafficAlertKeys({
+				clientId: "site_1",
+				kind: "tracking_zero",
+				lastSeen: 1_792_000_000,
+			})
+		).toEqual(first);
+		expect(
+			blockedTrafficAlertKeys({
+				clientId: "site_1",
+				kind: "tracking_zero",
+				lastSeen: 1_792_090_000,
+			}).incident
+		).not.toBe(first.incident);
+		expect(
+			blockedTrafficAlertKeys({
+				clientId: "site_1",
+				kind: "blocked_spike",
+				lastSeen: 1_792_000_000,
+			}).incident
 		).toBeNull();
 	});
 
@@ -117,7 +174,7 @@ describe("blocked traffic alert rules", () => {
 				baselineEvents: 0,
 				count: 25,
 				previousBlocked: 0,
-				recentEvents: 10,
+				silenceMinutes: 0,
 			})
 		).toEqual({ kind: "blocked_spike", severity: "warning" });
 	});
@@ -128,7 +185,7 @@ describe("blocked traffic alert rules", () => {
 				baselineEvents: 0,
 				count: 25,
 				previousBlocked: 20,
-				recentEvents: 10,
+				silenceMinutes: 0,
 			})
 		).toBeNull();
 		expect(
@@ -136,7 +193,7 @@ describe("blocked traffic alert rules", () => {
 				baselineEvents: 0,
 				count: 60,
 				previousBlocked: 20,
-				recentEvents: 10,
+				silenceMinutes: 0,
 			})
 		).toEqual({ kind: "blocked_spike", severity: "warning" });
 	});
@@ -146,6 +203,7 @@ describe("blocked traffic alert rules", () => {
 		expect(shouldEvaluateBlockedTrafficAlert(4)).toBe(false);
 		expect(shouldEvaluateBlockedTrafficAlert(24)).toBe(false);
 		expect(shouldEvaluateBlockedTrafficAlert(25)).toBe(true);
+		expect(shouldEvaluateBlockedTrafficAlert(26)).toBe(false);
 		expect(shouldEvaluateBlockedTrafficAlert(50)).toBe(true);
 		expect(shouldEvaluateBlockedTrafficAlert(75)).toBe(true);
 	});

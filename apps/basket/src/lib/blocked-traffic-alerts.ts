@@ -2,6 +2,7 @@ import type { BlockedTrafficInsert } from "@databuddy/db/clickhouse/tables";
 import { chQuery } from "@databuddy/db/clickhouse";
 import {
 	db,
+	emailUnsubscribeLinks,
 	normalizeEmailNotificationSettings,
 	type EmailNotificationSettings,
 } from "@databuddy/db";
@@ -30,12 +31,14 @@ function warnBlockedTrafficEmailUnconfigured(): void {
 }
 
 const ALERT_WINDOW_MINUTES = 15;
-const RECENT_SUCCESS_MINUTES = 30;
-const BASELINE_SUCCESS_HOURS = 7 * 24;
+const BASELINE_MINUTES = 7 * 24 * 60;
+const LAST_SEEN_LOOKBACK_DAYS = 8;
+const MIN_SILENCE_MINUTES = 30;
+const MIN_MISSING_PAGEVIEWS = 10;
 const ZERO_TRACKING_BLOCK_THRESHOLD = 3;
 const BLOCKED_SPIKE_THRESHOLD = 25;
-const MIN_BASELINE_EVENTS = 5;
 const SPIKE_MULTIPLIER = 3;
+const INCIDENT_TTL_SECONDS = 14 * 24 * 60 * 60;
 
 export interface BlockedTrafficAlertContext {
 	organizationId?: string | null;
@@ -44,9 +47,10 @@ export interface BlockedTrafficAlertContext {
 	websiteName?: string | null;
 }
 
-interface TrackingHealthCounts {
+interface TrackingHealth {
 	baselineEvents: number;
-	recentEvents: number;
+	lastSeen: number;
+	silenceMinutes: number;
 }
 
 interface PreviousBlockedCountRow {
@@ -125,18 +129,29 @@ async function incrementWindowCounter(
 	return count;
 }
 
-async function getTrackingHealth(
-	clientId: string
-): Promise<TrackingHealthCounts> {
-	const rows = await chQuery<TrackingHealthCounts>(
-		`SELECT
-			countIf(event_name = 'screen_view' AND time >= now() - INTERVAL ${RECENT_SUCCESS_MINUTES} MINUTE) AS recentEvents,
-			countIf(event_name = 'screen_view' AND time >= now() - INTERVAL ${BASELINE_SUCCESS_HOURS} HOUR AND time < now() - INTERVAL ${RECENT_SUCCESS_MINUTES} MINUTE) AS baselineEvents
+async function getTrackingHealth(clientId: string): Promise<TrackingHealth> {
+	const rows = await chQuery<TrackingHealth>(
+		`WITH (
+			SELECT max(time)
+			FROM analytics.events
+			PREWHERE client_id = {clientId:String}
+			WHERE event_name = 'screen_view' AND time >= now() - INTERVAL ${LAST_SEEN_LOOKBACK_DAYS} DAY
+		) AS last_seen
+		SELECT
+			toUInt64(toUnixTimestamp(last_seen)) AS lastSeen,
+			dateDiff('minute', last_seen, now()) AS silenceMinutes,
+			countIf(time > last_seen - INTERVAL ${BASELINE_MINUTES} MINUTE AND time <= last_seen) AS baselineEvents
 		FROM analytics.events
-		PREWHERE client_id = {clientId:String}`,
+		PREWHERE client_id = {clientId:String}
+		WHERE event_name = 'screen_view' AND time >= now() - INTERVAL ${LAST_SEEN_LOOKBACK_DAYS * 2} DAY`,
 		{ clientId }
 	);
-	return rows[0] ?? { baselineEvents: 0, recentEvents: 0 };
+	const row = rows[0];
+	return {
+		baselineEvents: Number(row?.baselineEvents ?? 0),
+		lastSeen: Number(row?.lastSeen ?? 0),
+		silenceMinutes: Number(row?.silenceMinutes ?? 0),
+	};
 }
 
 async function getPreviousBlockedCount(
@@ -159,16 +174,23 @@ async function getPreviousBlockedCount(
 	return rows[0]?.previousBlocked ?? 0;
 }
 
+export function expectedMissingPageviews(input: {
+	baselineEvents: number;
+	silenceMinutes: number;
+}): number {
+	return (input.baselineEvents * input.silenceMinutes) / BASELINE_MINUTES;
+}
+
 export function decideBlockedTrafficAlert(input: {
 	baselineEvents: number;
 	count: number;
 	previousBlocked: number;
-	recentEvents: number;
+	silenceMinutes: number;
 }): BlockedTrafficAlertDecision | null {
 	if (
 		input.count >= ZERO_TRACKING_BLOCK_THRESHOLD &&
-		input.recentEvents === 0 &&
-		input.baselineEvents >= MIN_BASELINE_EVENTS
+		input.silenceMinutes >= MIN_SILENCE_MINUTES &&
+		expectedMissingPageviews(input) >= MIN_MISSING_PAGEVIEWS
 	) {
 		return { kind: "tracking_zero", severity: "critical" };
 	}
@@ -189,7 +211,8 @@ export function shouldEvaluateBlockedTrafficAlert(
 ): boolean {
 	return (
 		windowBlockedCount === ZERO_TRACKING_BLOCK_THRESHOLD ||
-		windowBlockedCount >= BLOCKED_SPIKE_THRESHOLD
+		(windowBlockedCount >= BLOCKED_SPIKE_THRESHOLD &&
+			windowBlockedCount % BLOCKED_SPIKE_THRESHOLD === 0)
 	);
 }
 
@@ -202,22 +225,42 @@ export function requireBlockedTrafficEmailApiKey(
 	return apiKey;
 }
 
-function cooldownKey(
-	event: BlockedTrafficInsert,
-	kind: BlockedTrafficAlertDecision["kind"]
-): string {
-	return `blocked-traffic-alert:sent:${event.client_id}:${event.block_reason}:${getAlertOriginKey(event)}:${kind}`;
+export function blockedTrafficAlertKeys(input: {
+	clientId: string;
+	kind: BlockedTrafficAlertDecision["kind"];
+	lastSeen: number;
+}): { incident: string | null; site: string } {
+	return {
+		incident:
+			input.kind === "tracking_zero"
+				? `blocked-traffic-alert:incident:${input.clientId}:${input.lastSeen}`
+				: null,
+		site: `blocked-traffic-alert:site:${input.clientId}:${input.kind}`,
+	};
 }
 
-async function reserveCooldown(
-	event: BlockedTrafficInsert,
-	kind: BlockedTrafficAlertDecision["kind"],
+async function reserveAlert(
+	keys: ReturnType<typeof blockedTrafficAlertKeys>,
 	settings: EmailNotificationSettings
-): Promise<string | null> {
-	const key = cooldownKey(event, kind);
-	const seconds = settings.trackingHealth.cooldownMinutes * 60;
-	const reserved = await redis.set(key, "1", "EX", seconds, "NX");
-	return reserved === "OK" ? key : null;
+): Promise<string[] | null> {
+	if (keys.incident && (await redis.exists(keys.incident))) {
+		return null;
+	}
+	const cooldownSeconds = settings.trackingHealth.cooldownMinutes * 60;
+	if ((await redis.set(keys.site, "1", "EX", cooldownSeconds, "NX")) !== "OK") {
+		return null;
+	}
+	if (!keys.incident) {
+		return [keys.site];
+	}
+	if (
+		(await redis.set(keys.incident, "1", "EX", INCIDENT_TTL_SECONDS, "NX")) !==
+		"OK"
+	) {
+		await redis.del(keys.site);
+		return null;
+	}
+	return [keys.site, keys.incident];
 }
 
 async function getOwnerEmail(ownerId: string): Promise<string | null> {
@@ -277,7 +320,7 @@ async function sendAlertEmail(input: {
 	context: BlockedTrafficAlertContext;
 	decision: BlockedTrafficAlertDecision;
 	event: BlockedTrafficInsert;
-	trackingHealth: TrackingHealthCounts;
+	trackingHealth: TrackingHealth;
 	recipientEmail: string;
 	previousBlocked: number;
 	windowBlockedCount: number;
@@ -291,12 +334,20 @@ async function sendAlertEmail(input: {
 		"your website";
 	const subject =
 		input.decision.kind === "tracking_zero"
-			? `[Action required] Tracking may be down for ${siteLabel}`
-			: `[Databuddy] Blocked tracking increased for ${siteLabel}`;
+			? `Tracking stopped for ${siteLabel}`
+			: `Blocked tracking increased for ${siteLabel}`;
+	const links = input.context.organizationId
+		? emailUnsubscribeLinks({
+				apiUrl: config.urls.api,
+				dashboardUrl: config.urls.dashboard,
+				organizationId: input.context.organizationId,
+				secret: process.env.DATABUDDY_ENCRYPTION_KEY,
+				topic: "tracking-health",
+			})
+		: null;
 
 	const email = BlockedTrafficAlertEmail({
 		baselineEvents: input.trackingHealth.baselineEvents,
-		baselineHours: BASELINE_SUCCESS_HOURS,
 		blockReason: input.event.block_reason,
 		blockedCount: input.windowBlockedCount,
 		dashboardUrl: buildDashboardUrl(
@@ -305,9 +356,10 @@ async function sendAlertEmail(input: {
 		),
 		fix: buildRecommendedFix(input.event),
 		origin: input.event.origin ?? null,
+		preferences: links ?? undefined,
 		previousBlockedCount: input.previousBlocked,
-		recentEvents: input.trackingHealth.recentEvents,
 		severity: input.decision.severity,
+		silenceMinutes: input.trackingHealth.silenceMinutes,
 		siteLabel,
 		windowMinutes: ALERT_WINDOW_MINUTES,
 	});
@@ -328,6 +380,7 @@ async function sendAlertEmail(input: {
 			subject,
 			html,
 			text,
+			...(links ? { headers: links.headers } : {}),
 		}),
 	});
 
@@ -363,7 +416,7 @@ async function maybeSendBlockedTrafficAlertAsync(
 		baselineEvents: trackingHealth.baselineEvents,
 		count: windowBlockedCount,
 		previousBlocked,
-		recentEvents: trackingHealth.recentEvents,
+		silenceMinutes: trackingHealth.silenceMinutes,
 	});
 	if (!decision) {
 		return;
@@ -384,8 +437,15 @@ async function maybeSendBlockedTrafficAlertAsync(
 		return;
 	}
 
-	const reservedKey = await reserveCooldown(event, decision.kind, settings);
-	if (!reservedKey) {
+	const reservedKeys = await reserveAlert(
+		blockedTrafficAlertKeys({
+			clientId: event.client_id || "",
+			kind: decision.kind,
+			lastSeen: trackingHealth.lastSeen,
+		}),
+		settings
+	);
+	if (!reservedKeys) {
 		return;
 	}
 
@@ -400,7 +460,7 @@ async function maybeSendBlockedTrafficAlertAsync(
 			windowBlockedCount,
 		});
 	} catch (error) {
-		await redis.del(reservedKey).catch(() => undefined);
+		await redis.del(...reservedKeys).catch(() => undefined);
 		throw error;
 	}
 }

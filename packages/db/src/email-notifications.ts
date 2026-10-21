@@ -54,7 +54,7 @@ export const DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
 		usageWarnings: true,
 	},
 	trackingHealth: {
-		cooldownMinutes: 360,
+		cooldownMinutes: 24 * 60,
 		ignoredOrigins: [],
 		ignoredReasons: [],
 		mode: "critical_only",
@@ -79,7 +79,16 @@ function clampCooldown(minutes: number | undefined): number {
 	if (!Number.isFinite(minutes)) {
 		return DEFAULT_EMAIL_NOTIFICATION_SETTINGS.trackingHealth.cooldownMinutes;
 	}
-	return Math.min(Math.max(Math.round(minutes ?? 360), 15), 7 * 24 * 60);
+	return Math.min(
+		Math.max(
+			Math.round(
+				minutes ??
+					DEFAULT_EMAIL_NOTIFICATION_SETTINGS.trackingHealth.cooldownMinutes
+			),
+			15
+		),
+		7 * 24 * 60
+	);
 }
 
 export function normalizeEmailNotificationSettings(

@@ -13,7 +13,39 @@ describe("BlockedTrafficAlertEmail", () => {
 		);
 
 		expect(html).toContain("Blocked tracking increased for Docs");
-		expect(html).not.toContain("Tracking may be down for Docs");
+		expect(html).not.toContain("Tracking stopped for Docs");
+	});
+
+	test("tracking-stopped copy states the outage length and one email per outage", async () => {
+		const text = await renderEmail(
+			BlockedTrafficAlertEmail({
+				baselineEvents: 1240,
+				severity: "critical",
+				silenceMinutes: 190,
+				siteLabel: "Docs",
+			}),
+			{ plainText: true }
+		);
+
+		expect(text).toContain(
+			"has not received a page view from this website for 3 hours"
+		);
+		expect(text).toContain("3 hours ago");
+		expect(text).toContain("one email per outage");
+	});
+
+	test("links email settings and unsubscribe when provided", async () => {
+		const html = await renderEmail(
+			BlockedTrafficAlertEmail({
+				preferences: {
+					settingsUrl: "https://app.databuddy.cc/settings/notifications",
+					unsubscribeUrl: "https://api.databuddy.cc/unsubscribe",
+				},
+			})
+		);
+
+		expect(html).toContain("https://app.databuddy.cc/settings/notifications");
+		expect(html).toContain("https://api.databuddy.cc/unsubscribe");
 	});
 
 	test("includes safe dashboard link only when provided", async () => {
