@@ -131,7 +131,7 @@ const INITIAL_STATE: ProducerState = {
 	shuttingDown: false,
 };
 
-const ASYNC_INSERT_BUSY_TIMEOUT_MS = 50;
+const ASYNC_INSERT_BUSY_TIMEOUT_MS = 2000;
 
 const TOPIC_ERROR_TYPES = new Set([
 	"INVALID_TOPIC_EXCEPTION",

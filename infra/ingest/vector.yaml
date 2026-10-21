@@ -82,7 +82,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -112,7 +112,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -142,7 +142,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -172,7 +172,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -202,7 +202,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -232,7 +232,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -262,7 +262,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -292,7 +292,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -352,7 +352,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
@@ -382,7 +382,7 @@ sinks:
     batch:
       max_events: 5000
       max_bytes: 5000000
-      timeout_secs: 5
+      timeout_secs: 30
     request:
       headers:
         CF-Access-Client-Id: "${CLICKHOUSE_ACCESS_CLIENT_ID:-}"
