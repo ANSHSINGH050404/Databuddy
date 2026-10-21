@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS analytics.link_visits
 	`device_type` Nullable(String) CODEC(ZSTD(1)),
 	INDEX idx_link_id link_id TYPE bloom_filter(0.01) GRANULARITY 1
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_link_visits', '{replica}')
-PARTITION BY toDate(timestamp)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_link_visits_v2', '{replica}')
+PARTITION BY toYYYYMM(timestamp)
 ORDER BY (link_id, timestamp)
 SETTINGS index_granularity = 8192

@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS analytics.web_vitals_spans
 	INDEX idx_session_id session_id TYPE bloom_filter(0.01) GRANULARITY 1,
 	INDEX idx_metric_value metric_value TYPE minmax GRANULARITY 1
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_web_vitals_spans', '{replica}')
-PARTITION BY toDate(timestamp)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_web_vitals_spans_v2', '{replica}')
+PARTITION BY toYYYYMM(timestamp)
 ORDER BY (client_id, metric_name, path, timestamp)
 SETTINGS index_granularity = 8192

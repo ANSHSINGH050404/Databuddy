@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS analytics.ai_traffic_spans
 	INDEX idx_bot_type bot_type TYPE bloom_filter(0.01) GRANULARITY 1,
 	INDEX idx_bot_name bot_name TYPE bloom_filter(0.01) GRANULARITY 1
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_ai_traffic_spans', '{replica}')
-PARTITION BY toDate(timestamp)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_ai_traffic_spans_v2', '{replica}')
+PARTITION BY toYYYYMM(timestamp)
 ORDER BY (client_id, bot_type, timestamp)
 SETTINGS index_granularity = 8192

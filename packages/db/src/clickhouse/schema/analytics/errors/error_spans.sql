@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS analytics.error_spans
 	INDEX idx_session_id session_id TYPE bloom_filter(0.01) GRANULARITY 1,
 	INDEX idx_error_type error_type TYPE bloom_filter(0.01) GRANULARITY 1
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_error_spans', '{replica}')
-PARTITION BY toDate(timestamp)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/analytics_error_spans_v2', '{replica}')
+PARTITION BY toYYYYMM(timestamp)
 ORDER BY (client_id, error_type, path, timestamp)
 SETTINGS index_granularity = 8192
