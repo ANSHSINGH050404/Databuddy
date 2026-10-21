@@ -9,6 +9,18 @@ export const PLAN_IDS = {
 
 export type PlanId = (typeof PLAN_IDS)[keyof typeof PLAN_IDS];
 
+export function isRenewingSubscription(subscription: {
+	autoEnable: boolean;
+	canceledAt: number | null;
+	planId: string;
+}): boolean {
+	return (
+		subscription.planId !== PLAN_IDS.FREE &&
+		!subscription.autoEnable &&
+		subscription.canceledAt === null
+	);
+}
+
 export const INTELLIGENCE_PLAN_IDS = {
 	ANALYST: "intelligence",
 	DATA_TEAM: "intelligence_scale",

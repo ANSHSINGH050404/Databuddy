@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	GATED_FEATURES,
+	isRenewingSubscription,
 	getNextPlanForFeature,
 	getPlanCapabilities,
 	getPlanFeatureLimit,
@@ -28,5 +29,44 @@ describe("plan feature helpers", () => {
 		expect(getPlanCapabilities("legacy-enterprise")).toBe(
 			getPlanCapabilities(PLAN_IDS.FREE)
 		);
+	});
+});
+
+describe("isRenewingSubscription", () => {
+	it("does not treat an explicitly attached Free plan as renewing", () => {
+		expect(
+			isRenewingSubscription({
+				autoEnable: false,
+				canceledAt: null,
+				planId: "free",
+			})
+		).toBe(false);
+	});
+
+	it("treats an uncanceled paid plan as renewing until it is canceled", () => {
+		expect(
+			isRenewingSubscription({
+				autoEnable: false,
+				canceledAt: null,
+				planId: "pro",
+			})
+		).toBe(true);
+		expect(
+			isRenewingSubscription({
+				autoEnable: false,
+				canceledAt: 1_792_000_000_000,
+				planId: "pro",
+			})
+		).toBe(false);
+	});
+
+	it("does not treat auto-enabled plans as renewing", () => {
+		expect(
+			isRenewingSubscription({
+				autoEnable: true,
+				canceledAt: null,
+				planId: "free",
+			})
+		).toBe(false);
 	});
 });
