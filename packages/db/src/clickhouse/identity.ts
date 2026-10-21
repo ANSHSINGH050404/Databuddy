@@ -27,10 +27,11 @@ export type IdentityPairKey = keyof typeof IDENTITY_PAIR_TABLES;
 
 export function identityPairMapCte(keyColumn: IdentityPairKey): string {
 	return `(
-	SELECT ${keyColumn}, identity_time, profile_id
+	SELECT ${keyColumn}, min(identity_time) AS identity_time, profile_id
 	FROM ${IDENTITY_PAIR_TABLES[keyColumn]}
 	WHERE client_id = {websiteId:String}
-		AND identity_time >= parseDateTimeBestEffort({startDate:String})
+	GROUP BY ${keyColumn}, profile_id
+	HAVING max(last_seen) >= parseDateTimeBestEffort({startDate:String})
 		AND identity_time <= parseDateTimeBestEffort({endDate:String})
 )`;
 }

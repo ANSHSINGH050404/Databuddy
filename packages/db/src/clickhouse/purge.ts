@@ -18,8 +18,8 @@ export const CLIENT_ID_PURGE_TABLES = {
 	"analytics.blocked_traffic": null,
 	"analytics.ai_traffic_spans": "timestamp",
 	"analytics.daily_pageviews": "date",
-	"analytics.identity_anon_pairs": "identity_time",
-	"analytics.identity_session_pairs": "identity_time",
+	"analytics.identity_anon_pairs": "last_seen",
+	"analytics.identity_session_pairs": "last_seen",
 } as const;
 
 export const WEBSITE_ID_PURGE_TABLES = {

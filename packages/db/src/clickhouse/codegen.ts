@@ -20,9 +20,14 @@ const FLOAT_PATTERN = /^Float/i;
 const INT_PATTERN = /Int/i;
 const LOW_CARDINALITY_PATTERN = /^LowCardinality\((.*)\)$/i;
 const NULLABLE_PATTERN = /^Nullable\((.*)\)$/i;
+const SIMPLE_AGGREGATE_PATTERN = /^SimpleAggregateFunction\(\w+,\s*(.*)\)$/i;
+
+function storedType(rawType: string): string {
+	return rawType.trim().replace(SIMPLE_AGGREGATE_PATTERN, "$1").trim();
+}
 
 function tsType(rawType: string): string {
-	let t = rawType.trim();
+	let t = storedType(rawType);
 	let nullable = false;
 	const lowCardinalityInner = t.match(LOW_CARDINALITY_PATTERN)?.[1];
 	if (lowCardinalityInner !== undefined) {
@@ -56,7 +61,7 @@ function pascal(name: string): string {
 }
 
 function insertTsType(rawType: string): string {
-	let t = rawType.replace(LOW_CARDINALITY_PATTERN, "$1").trim();
+	let t = storedType(rawType).replace(LOW_CARDINALITY_PATTERN, "$1").trim();
 	const nullableInner = t.match(NULLABLE_PATTERN)?.[1];
 	if (nullableInner !== undefined) {
 		t = nullableInner.trim();

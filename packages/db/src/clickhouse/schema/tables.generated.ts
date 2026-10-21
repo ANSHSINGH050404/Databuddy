@@ -325,6 +325,7 @@ export interface IdentityAnonPairsRow {
 	client_id: string;
 	anonymous_id: string;
 	identity_time: string;
+	last_seen: string;
 	profile_id: string;
 }
 
@@ -332,6 +333,7 @@ export interface IdentityAnonPairsInsert {
 	client_id: string;
 	anonymous_id: string;
 	identity_time: number | string;
+	last_seen: number | string;
 	profile_id: string;
 }
 
@@ -339,6 +341,7 @@ export interface IdentitySessionPairsRow {
 	client_id: string;
 	session_id: string;
 	identity_time: string;
+	last_seen: string;
 	profile_id: string;
 }
 
@@ -346,6 +349,7 @@ export interface IdentitySessionPairsInsert {
 	client_id: string;
 	session_id: string;
 	identity_time: number | string;
+	last_seen: number | string;
 	profile_id: string;
 }
 
@@ -606,8 +610,8 @@ export const TABLE_COLUMNS = {
 	"analytics.engagement_spans": ["client_id", "anonymous_id", "session_id", "timestamp", "path", "device_type", "browser_name", "country", "page_index", "exit_type", "time_on_page", "active_time", "time_to_first_interaction", "max_scroll_depth", "scroll_count", "click_count", "key_count", "interaction_count", "copy_count", "rage_click_count", "dead_click_count", "rage_click_target", "dead_click_target", "form_field_count", "form_submit_count", "last_form_field", "form_abandoned", "error_count", "delivery_id"],
 	"analytics.error_spans": ["client_id", "anonymous_id", "session_id", "timestamp", "path", "message", "filename", "lineno", "colno", "stack", "error_type", "delivery_id"],
 	"analytics.events": ["id", "client_id", "event_name", "anonymous_id", "time", "session_id", "referrer", "url", "path", "title", "ip", "user_agent", "browser_name", "browser_version", "os_name", "os_version", "device_type", "device_brand", "device_model", "viewport_size", "language", "timezone", "time_on_page", "country", "region", "city", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "dom_ready_time", "ttfb", "request_time", "render_time", "scroll_depth", "interaction_count", "page_count", "properties", "created_at", "timestamp", "profile_id"],
-	"analytics.identity_anon_pairs": ["client_id", "anonymous_id", "identity_time", "profile_id"],
-	"analytics.identity_session_pairs": ["client_id", "session_id", "identity_time", "profile_id"],
+	"analytics.identity_anon_pairs": ["client_id", "anonymous_id", "identity_time", "last_seen", "profile_id"],
+	"analytics.identity_session_pairs": ["client_id", "session_id", "identity_time", "last_seen", "profile_id"],
 	"analytics.link_visits": ["id", "link_id", "timestamp", "referrer", "user_agent", "ip_hash", "country", "region", "city", "browser_name", "device_type"],
 	"analytics.mcp_spans": ["owner_id", "website_id", "timestamp", "environment", "server_name", "server_version", "tool", "is_error", "error", "error_code", "duration_ms", "output_chars", "session_id", "client", "client_name", "client_version", "user_agent"],
 	"analytics.outgoing_links": ["id", "client_id", "anonymous_id", "session_id", "href", "text", "properties", "timestamp"],
