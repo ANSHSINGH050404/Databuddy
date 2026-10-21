@@ -1043,9 +1043,10 @@ export const baseAuthOptions = {
 		customRules: {
 			"/sign-up/email": { window: 60, max: 3 },
 			"/sign-in/email": { window: 10, max: 3 },
-			"/forget-password": { window: 60, max: 3 },
-			"/magic-link/send": { window: 60, max: 3 },
-			"/email-otp/send": { window: 60, max: 3 },
+			"/request-password-reset": { window: 60, max: 3 },
+			"/sign-in/magic-link": { window: 60, max: 3 },
+			"/email-otp/send-verification-otp": { window: 60, max: 3 },
+			"/email-otp/request-password-reset": { window: 60, max: 3 },
 			"/organization/invite-member": { window: 3600, max: 5 },
 		},
 	},
@@ -1390,7 +1391,7 @@ export const baseAuthOptions = {
 				await enforceAuthEmailRateLimit({
 					callback: "magic_link",
 					email,
-					key: `magic:${email}`,
+					key: `magic:${email.toLowerCase()}`,
 					limit: 3,
 					windowSeconds: 900,
 				});
@@ -1613,6 +1614,13 @@ export const baseAuthOptions = {
 				organization,
 				invitation,
 			}) => {
+				await enforceAuthEmailRateLimit({
+					callback: "invitation",
+					email,
+					key: `invite:${email.toLowerCase()}`,
+					limit: 3,
+					windowSeconds: 24 * 60 * 60,
+				});
 				const invitationLink = `${config.urls.dashboard}/invitations/${invitation.id}`;
 				await sendAuthEmail({
 					to: email,
