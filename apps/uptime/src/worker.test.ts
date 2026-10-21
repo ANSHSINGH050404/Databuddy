@@ -588,15 +588,30 @@ describe("processUptimeCheck", () => {
 		]);
 	});
 
-	it("does not retry an attempt that timed out", async () => {
+	it("retries a timed-out attempt once before marking the check down", async () => {
 		checkResults = [uptimeData({ status: 0, error: "Timeout after 5000ms" })];
 
 		await processUptimeCheckForTest("schedule-1", "scheduled", deps());
 
-		expect(calls.check.map((c) => c.attempt)).toEqual([1]);
+		expect(calls.check.map((c) => c.attempt)).toEqual([1, 2]);
 		expect(calls.loggerFields).toContainEqual(
 			expect.objectContaining({ outcome: "down" })
 		);
+	});
+
+	it("treats a single slow response as up when the retry succeeds", async () => {
+		checkResults = [
+			uptimeData({ status: 0, error: "Timeout after 5000ms" }),
+			uptimeData({ attempt: 2, retries: 1 }),
+		];
+
+		await processUptimeCheckForTest("schedule-1", "scheduled", deps());
+
+		expect(calls.check.map((c) => c.attempt)).toEqual([1, 2]);
+		expect(calls.previousStateReads).toEqual([]);
+		expect(calls.email).toEqual([
+			{ schedule: schedule(), data: uptimeData({ attempt: 2, retries: 1 }) },
+		]);
 	});
 
 	it("fails the job instead of resetting the streak when previous state is unavailable", async () => {

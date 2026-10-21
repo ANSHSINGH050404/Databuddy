@@ -40,20 +40,33 @@ type TransitionNotificationPayload = Parameters<NotificationClient["send"]>[0];
 
 interface TransitionResult {
 	alarms_fired: number;
+	down_alert_cooldown?: boolean;
 	transition_kind: "down" | "recovered" | null;
 }
 
-export function resolveTransitionKind(
-	previous: number | undefined,
-	current: number
-): "down" | "recovered" | null {
+export const DOWN_ALERT_MIN_FAILURE_STREAK = 2;
+export const DOWN_ALERT_COOLDOWN_SECONDS = 6 * 60 * 60;
+
+export type TransitionDecision = "down" | "recovered" | "cooldown" | null;
+
+export function resolveTransitionKind(input: {
+	current: number;
+	failureStreak: number;
+	lastNotified: number | undefined;
+	recentDownAlert: boolean;
+}): TransitionDecision {
+	const { current, lastNotified } = input;
 	if (current === MonitorStatus.UP) {
-		return previous === MonitorStatus.DOWN ? "recovered" : null;
+		return lastNotified === MonitorStatus.DOWN ? "recovered" : null;
 	}
-	if (current === MonitorStatus.DOWN) {
-		return previous === MonitorStatus.DOWN ? null : "down";
+	if (
+		current !== MonitorStatus.DOWN ||
+		lastNotified === MonitorStatus.DOWN ||
+		input.failureStreak < DOWN_ALERT_MIN_FAILURE_STREAK
+	) {
+		return null;
 	}
-	return null;
+	return input.recentDownAlert ? "cooldown" : "down";
 }
 
 export function shouldReleaseTransitionClaim(
@@ -200,7 +213,34 @@ const lookupLinkedAlarms = (scheduleId: string, organizationId: string) =>
 		});
 	});
 
-const claimTransition = (scheduleId: string, currentStatus: number) =>
+const downAlertKey = (scheduleId: string) => `uptime:down-alert:${scheduleId}`;
+
+const hasRecentDownAlert = (scheduleId: string) =>
+	recover(
+		async () => (await redis.exists(downAlertKey(scheduleId))) === 1,
+		false,
+		{ error_step: "down_alert_cooldown_read", schedule_id: scheduleId }
+	);
+
+const markDownAlertSent = (scheduleId: string) =>
+	recover(
+		async () => {
+			await redis.set(
+				downAlertKey(scheduleId),
+				"1",
+				"EX",
+				DOWN_ALERT_COOLDOWN_SECONDS
+			);
+		},
+		undefined,
+		{ error_step: "down_alert_cooldown_write", schedule_id: scheduleId }
+	);
+
+const claimTransition = (
+	scheduleId: string,
+	data: UptimeData,
+	recentDownAlert: boolean
+) =>
 	recover(
 		() =>
 			withTransaction(async (tx) => {
@@ -214,20 +254,22 @@ const claimTransition = (scheduleId: string, currentStatus: number) =>
 					return null;
 				}
 
-				const kind = resolveTransitionKind(
-					row.last ?? undefined,
-					currentStatus
-				);
-				if (kind === null) {
-					return null;
+				const decision = resolveTransitionKind({
+					current: data.status,
+					failureStreak: data.failure_streak,
+					lastNotified: row.last ?? undefined,
+					recentDownAlert,
+				});
+				if (decision === null || decision === "cooldown") {
+					return { kind: null, cooldown: decision === "cooldown" } as const;
 				}
 
 				await tx
 					.update(uptimeSchedules)
-					.set({ lastNotifiedStatus: currentStatus })
+					.set({ lastNotifiedStatus: data.status })
 					.where(eq(uptimeSchedules.id, scheduleId));
 
-				return { kind, previousStatus: row.last };
+				return { kind: decision, previousStatus: row.last };
 			}),
 		null,
 		{ error_step: "transition_claim" }
@@ -445,10 +487,21 @@ export function fireTransitionAlerts({
 }): Promise<TransitionResult> {
 	return Effect.runPromise(
 		Effect.gen(function* () {
-			const claim = yield* claimTransition(schedule.id, data.status);
+			const recentDownAlert =
+				data.status === MonitorStatus.DOWN &&
+				data.failure_streak >= DOWN_ALERT_MIN_FAILURE_STREAK &&
+				(yield* hasRecentDownAlert(schedule.id));
+			const claim = yield* claimTransition(schedule.id, data, recentDownAlert);
 
 			if (claim === null) {
 				return { alarms_fired: 0, transition_kind: null };
+			}
+			if (claim.kind === null) {
+				return {
+					alarms_fired: 0,
+					transition_kind: null,
+					...(claim.cooldown ? { down_alert_cooldown: true } : {}),
+				};
 			}
 			const { kind } = claim;
 			const releaseClaim = releaseTransitionClaim({
@@ -504,6 +557,9 @@ export function fireTransitionAlerts({
 				)
 			) {
 				yield* releaseClaim;
+			}
+			if (kind === "down" && fired > 0) {
+				yield* markDownAlertSent(schedule.id);
 			}
 			return { alarms_fired: fired, transition_kind: kind };
 		})

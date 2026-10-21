@@ -117,6 +117,7 @@ export type UptimeWorkerDeps = typeof uptimeWorkerDeps;
 
 const DEFAULT_UPTIME_WORKER_CONCURRENCY = 25;
 const CHECK_ATTEMPTS = 3;
+const TIMED_OUT_ATTEMPTS = 2;
 const DEFAULT_CHECK_RETRY_DELAY_MS = 2000;
 
 function checkRetryDelayMs(): number {
@@ -179,15 +180,19 @@ const runCheck = (
 			cacheBust: schedule.cacheBust,
 		};
 		let data = yield* deps.checkUptime(monitorId, schedule.url, 1, options);
+		let timedOutAttempts = isTimedOut(data) ? 1 : 0;
 		for (
 			let attempt = 2;
 			data.status !== MonitorStatus.UP &&
-			!isTimedOut(data) &&
+			timedOutAttempts < TIMED_OUT_ATTEMPTS &&
 			attempt <= CHECK_ATTEMPTS;
 			attempt++
 		) {
 			yield* Effect.sleep(checkRetryDelayMs());
 			data = yield* deps.checkUptime(monitorId, schedule.url, attempt, options);
+			if (isTimedOut(data)) {
+				timedOutAttempts++;
+			}
 		}
 		return data;
 	});
@@ -258,6 +263,9 @@ const runTransitionAlerts = (
 							transition_kind: transition.transition_kind,
 							alarms_fired: transition.alarms_fired,
 						});
+					}
+					if (transition.down_alert_cooldown) {
+						log.set({ down_alert_cooldown: true });
 					}
 				},
 				(error: unknown) => {

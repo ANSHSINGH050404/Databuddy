@@ -4,6 +4,8 @@ import {
 	buildSslExpiryNotificationPayload,
 	buildTransitionNotificationPayload,
 	buildUptimeDeliveryPlan,
+	DOWN_ALERT_COOLDOWN_SECONDS,
+	DOWN_ALERT_MIN_FAILURE_STREAK,
 	resolveSslExpiryAlert,
 	resolveTransitionKind,
 	resolveUptimeEmailPreference,
@@ -38,38 +40,82 @@ const baseUptimeData: UptimeData = {
 	user_agent: "Databuddy test",
 };
 
-describe("resolveTransitionKind — happy path transitions", () => {
-	test("fresh monitor going UP is silent", () => {
-		expect(resolveTransitionKind(undefined, UP)).toBeNull();
+const decide = (
+	lastNotified: number | undefined,
+	current: number,
+	failureStreak = current === DOWN ? DOWN_ALERT_MIN_FAILURE_STREAK : 0,
+	recentDownAlert = false
+) =>
+	resolveTransitionKind({
+		current,
+		failureStreak,
+		lastNotified,
+		recentDownAlert,
 	});
 
-	test("fresh monitor going DOWN fires a down alert", () => {
-		expect(resolveTransitionKind(undefined, DOWN)).toBe("down");
+describe("resolveTransitionKind", () => {
+	test("a single failed check is not alertable, including a monitor's first check", () => {
+		expect(decide(undefined, DOWN, 1)).toBeNull();
+		expect(decide(UP, DOWN, 1)).toBeNull();
 	});
 
-	test("UP → DOWN fires a down alert", () => {
-		expect(resolveTransitionKind(UP, DOWN)).toBe("down");
+	test("two consecutive failed checks fire one down alert", () => {
+		expect(decide(undefined, DOWN, 2)).toBe("down");
+		expect(decide(UP, DOWN, 2)).toBe("down");
+		expect(decide(DOWN, DOWN, 3)).toBeNull();
 	});
 
-	test("DOWN → UP fires a recovered alert", () => {
-		expect(resolveTransitionKind(DOWN, UP)).toBe("recovered");
-	});
-});
-
-describe("resolveTransitionKind — dedupe invariants", () => {
-	test("DOWN → DOWN is silent (no duplicate down alerts)", () => {
-		expect(resolveTransitionKind(DOWN, DOWN)).toBeNull();
+	test("recovery only follows a claimed down alert", () => {
+		expect(decide(DOWN, UP)).toBe("recovered");
+		expect(decide(UP, UP)).toBeNull();
+		expect(decide(undefined, UP)).toBeNull();
 	});
 
-	test("UP → UP is silent", () => {
-		expect(resolveTransitionKind(UP, UP)).toBeNull();
+	test("a down alert within the cooldown is held back", () => {
+		expect(decide(UP, DOWN, 2, true)).toBe("cooldown");
+		expect(decide(UP, DOWN, 1, true)).toBeNull();
 	});
-});
 
-describe("resolveTransitionKind — defensive inputs", () => {
 	test("unknown numeric current status is silent", () => {
-		expect(resolveTransitionKind(DOWN, 99)).toBeNull();
-		expect(resolveTransitionKind(UP, -1)).toBeNull();
+		expect(decide(DOWN, 99)).toBeNull();
+		expect(decide(UP, -1)).toBeNull();
+	});
+
+	test("a flapping one-minute monitor sends one down and one recovery per six hours", () => {
+		const MINUTE_MS = 60_000;
+		const cooldownMs = DOWN_ALERT_COOLDOWN_SECONDS * 1000;
+		let lastNotified: number | undefined;
+		let streak = 0;
+		let downAlertAt = Number.NEGATIVE_INFINITY;
+		const sent: Array<{ kind: string; minute: number }> = [];
+		const checks = Array.from({ length: 12 * 60 }, (_, minute) =>
+			minute % 3 === 2 ? UP : DOWN
+		);
+
+		for (const [minute, status] of checks.entries()) {
+			const now = minute * MINUTE_MS;
+			streak = status === DOWN ? streak + 1 : 0;
+			const decision = decide(
+				lastNotified,
+				status,
+				streak,
+				now - downAlertAt < cooldownMs
+			);
+			if (decision === "down" || decision === "recovered") {
+				lastNotified = status;
+				sent.push({ kind: decision, minute });
+			}
+			if (decision === "down") {
+				downAlertAt = now;
+			}
+		}
+
+		expect(sent).toEqual([
+			{ kind: "down", minute: 1 },
+			{ kind: "recovered", minute: 2 },
+			{ kind: "down", minute: 361 },
+			{ kind: "recovered", minute: 362 },
+		]);
 	});
 });
 
