@@ -50,6 +50,7 @@ import {
 	type AuditActor,
 	type AuditRequestContext,
 } from "@databuddy/shared/audit";
+import { PLAN_IDS } from "@databuddy/shared/types/features";
 import { Autumn, AutumnError } from "autumn-js";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import type { BetterAuthPlugin } from "better-auth";
@@ -597,7 +598,9 @@ async function assertNoRenewingSubscription(userId: string): Promise<void> {
 	if (
 		customer?.subscriptions.some(
 			(subscription) =>
-				!subscription.autoEnable && subscription.canceledAt === null
+				subscription.planId !== PLAN_IDS.FREE &&
+				!subscription.autoEnable &&
+				subscription.canceledAt === null
 		)
 	) {
 		throw new APIError("BAD_REQUEST", {
