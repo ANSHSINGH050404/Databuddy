@@ -76,7 +76,7 @@ export function handleDatabuddyMcpRequest(
 		maxRequestBodySize: MAX_MCP_REQUEST_BYTES,
 		onerror: (error) => mergeWideEvent({ mcp_transport_error: error.message }),
 	});
-	return handler.fetch(options.request).catch((error: unknown) => {
+	return handler.fetch(options.request).catch((error) => {
 		captureError(error, { mcp_error: true });
 		throw error;
 	});
