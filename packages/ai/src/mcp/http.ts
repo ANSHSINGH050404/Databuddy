@@ -6,15 +6,13 @@ import {
 import { config } from "@databuddy/env/app";
 import { readBooleanEnv } from "@databuddy/env/boolean";
 import { trackMcp } from "@databuddy/sdk/mcp";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
-	CallToolRequestSchema,
-	ErrorCode,
-	ListToolsRequestSchema,
-	McpError,
+	createMcpHandler,
+	McpServer,
+	ProtocolError,
+	ProtocolErrorCode,
 	type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { captureError, mergeWideEvent } from "../lib/tracing";
 import {
@@ -34,15 +32,6 @@ export interface DatabuddyMcpHttpOptions extends McpRequestContext {
 
 const MCP_AUTH_CHALLENGE = `Bearer realm="databuddy", resource_metadata="${new URL("/.well-known/oauth-protected-resource", config.urls.mcp).href}"`;
 const MAX_MCP_REQUEST_BYTES = 1_048_576;
-const ToolCallRequestSchema = CallToolRequestSchema.extend({
-	params: CallToolRequestSchema.shape.params
-		.omit({ arguments: true, name: true })
-		.loose()
-		.transform((params) =>
-			params.arguments === null ? { ...params, arguments: undefined } : params
-		)
-		.optional(),
-});
 
 export function createMcpErrorResponse(
 	status: number,
@@ -67,68 +56,25 @@ export function createMcpUnauthorizedResponse(): Response {
 	);
 }
 
-async function readSingleMcpMessage(
-	request: Request
-): Promise<Response | { message: unknown }> {
-	const tooLarge = () =>
-		createMcpErrorResponse(413, -32_600, "Request body is larger than 1 MB.");
-	if (Number(request.headers.get("content-length")) > MAX_MCP_REQUEST_BYTES) {
-		return tooLarge();
-	}
-	const decoder = new TextDecoder();
-	let body = "";
-	let bodyBytes = 0;
-	if (request.body) {
-		const reader = request.body.getReader();
-		for (
-			let chunk = await reader.read();
-			!chunk.done;
-			chunk = await reader.read()
-		) {
-			bodyBytes += chunk.value.byteLength;
-			if (bodyBytes > MAX_MCP_REQUEST_BYTES) {
-				await reader.cancel();
-				return tooLarge();
-			}
-			body += decoder.decode(chunk.value, { stream: true });
-		}
-	}
-	body += decoder.decode();
-	let message: unknown;
-	try {
-		message = JSON.parse(body);
-	} catch {
-		return createMcpErrorResponse(400, -32_700, "Parse error: Invalid JSON");
-	}
-	if (Array.isArray(message)) {
-		mergeWideEvent({ mcp_batch_rejected: true });
-		return createMcpErrorResponse(
-			400,
-			-32_600,
-			"Batch requests are not supported. Send one JSON-RPC message per request."
-		);
-	}
-	return { message };
-}
-
-export async function handleDatabuddyMcpRequest(
+export function handleDatabuddyMcpRequest(
 	options: DatabuddyMcpHttpOptions
 ): Promise<Response> {
-	if (options.request.method !== "POST") {
-		return new Response(null, { status: 405, headers: { Allow: "POST" } });
-	}
-
-	const parsed = await readSingleMcpMessage(options.request);
-	if (parsed instanceof Response) {
-		return parsed;
-	}
-
 	mergeWideEvent({
 		mcp_auth: authType(options),
 		mcp_session: Boolean(options.userId && !options.oauth),
 		mcp_api_key: Boolean(options.apiKey),
 	});
+	const handler = createMcpHandler(() => createMcpServer(options), {
+		maxRequestBodySize: MAX_MCP_REQUEST_BYTES,
+		onerror: (error) => mergeWideEvent({ mcp_transport_error: error.message }),
+	});
+	return handler.fetch(options.request).catch((error: unknown) => {
+		captureError(error, { mcp_error: true });
+		throw error;
+	});
+}
 
+function createMcpServer(options: DatabuddyMcpHttpOptions): McpServer {
 	const server = new McpServer(
 		{
 			name: "databuddy",
@@ -153,45 +99,24 @@ export async function handleDatabuddyMcpRequest(
 	const tools = allTools.filter((tool) => callerCanCallTool(options, tool));
 	if (tools.length) {
 		server.server.registerCapabilities({ tools: { listChanged: true } });
-		server.server.setRequestHandler(ListToolsRequestSchema, () => ({
+		server.server.setRequestHandler("tools/list", () => ({
 			tools: tools.map(toListedTool),
 		}));
-		server.server.setRequestHandler(ToolCallRequestSchema, (request, extra) => {
-			const { params } = CallToolRequestSchema.parse(request);
+		server.server.setRequestHandler("tools/call", ({ params }, ctx) => {
 			const tool = tools.find(({ name }) => name === params.name);
 			if (tool) {
-				return tool.handler(params.arguments, extra);
+				return tool.handler(params.arguments, { signal: ctx.mcpReq.signal });
 			}
 			const hidden = allTools.find(({ name }) => name === params.name);
-			throw new McpError(
-				ErrorCode.InvalidParams,
+			throw new ProtocolError(
+				ProtocolErrorCode.InvalidParams,
 				hidden
 					? `Tool ${params.name} requires scopes: ${hidden.metadata.access.scopes.join(", ")}. Reconnect or use an API key that has them.`
 					: `Unknown tool: ${params.name}`
 			);
 		});
 	}
-
-	const transport = new WebStandardStreamableHTTPServerTransport({
-		sessionIdGenerator: undefined,
-		enableJsonResponse: true,
-	});
-
-	transport.onerror = (error) => {
-		mergeWideEvent({ mcp_transport_error: error.message });
-	};
-
-	try {
-		await server.connect(transport);
-		return await transport.handleRequest(options.request, {
-			parsedBody: parsed.message,
-		});
-	} catch (error) {
-		captureError(error, { mcp_error: true });
-		throw error;
-	} finally {
-		await server.close().catch(() => {});
-	}
+	return server;
 }
 
 function callerCanCallTool(

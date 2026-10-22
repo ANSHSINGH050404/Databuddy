@@ -1,7 +1,7 @@
 import { createInternalPrincipal } from "@databuddy/rpc";
 import type { ApiScope } from "@databuddy/shared/api-scopes";
 import { MCP_API_SCOPES } from "@databuddy/shared/mcp-access";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { ORPCError } from "@orpc/server";
 import { describe, expect, spyOn, test } from "bun:test";
 import { z } from "zod";
@@ -35,6 +35,17 @@ function readToolError(result: CallToolResult): unknown {
 	return (JSON.parse(content.text) as { error: unknown }).error;
 }
 
+async function readMcpMessage(response: Response): Promise<unknown> {
+	if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+		return response.json();
+	}
+	const data = (await response.text())
+		.split("\n")
+		.filter((line) => line.startsWith("data:"))
+		.at(-1);
+	return JSON.parse(data?.slice(5) ?? "null");
+}
+
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
 const MAX_DESCRIPTION_LEN = 240;
 
@@ -49,35 +60,7 @@ describe("MCP transport", () => {
 		expect(response.headers.get("www-authenticate")).toContain(
 			"/.well-known/oauth-protected-resource"
 		);
-		expect(await response.json()).toMatchObject({
-			id: null,
-			jsonrpc: "2.0",
-		});
-	});
-
-	test("rejects JSON-RPC batches instead of running every message", async () => {
-		const message = { jsonrpc: "2.0", method: "tools/list", params: {} };
-		const response = await handleDatabuddyMcpRequest({
-			apiKey: null,
-			organizationId: "org-1",
-			request: new Request("https://api.databuddy.test/v1/mcp", {
-				body: JSON.stringify([
-					{ ...message, id: 1 },
-					{ ...message, id: 2 },
-				]),
-				headers: {
-					accept: "application/json, text/event-stream",
-					"content-type": "application/json",
-				},
-				method: "POST",
-			}),
-			requestHeaders: new Headers(),
-			userId: "user-1",
-		});
-
-		expect(response.status).toBe(400);
-		expect(await response.json()).toMatchObject({
-			error: { code: -32_600 },
+		expect(await readMcpMessage(response)).toMatchObject({
 			id: null,
 			jsonrpc: "2.0",
 		});
@@ -130,7 +113,7 @@ describe("MCP transport", () => {
 			requestHeaders: new Headers(),
 			userId: "user-1",
 		});
-		const body = (await response.json()) as { result: CallToolResult };
+		const body = (await readMcpMessage(response)) as { result: CallToolResult };
 
 		expect(response.status).toBe(200);
 		expect(readToolError(body.result)).toMatchObject({
@@ -138,7 +121,7 @@ describe("MCP transport", () => {
 		});
 	});
 
-	test("treats null tool arguments as absent and answers malformed calls with -32602", async () => {
+	test("answers malformed and unknown tool calls with -32602", async () => {
 		const callTool = async (
 			params: unknown,
 			oauth?: McpRequestContext["oauth"]
@@ -163,22 +146,14 @@ describe("MCP transport", () => {
 				requestHeaders: new Headers(),
 				userId: oauth ? null : "user-1",
 			});
-			return (await response.json()) as {
+			return (await readMcpMessage(response)) as {
 				error?: { code: number; message: string };
 				result?: CallToolResult;
 			};
 		};
 
-		const nullArguments = await callTool({
-			arguments: null,
-			name: "get_investigation",
-		});
-		expect(
-			nullArguments.result && readToolError(nullArguments.result)
-		).toMatchObject({
-			code: "invalid_input",
-		});
 		for (const params of [
+			{ arguments: null, name: "get_investigation" },
 			{ arguments: [], name: "get_investigation" },
 			{ arguments: "x", name: "get_investigation" },
 			{ arguments: {} },
@@ -196,6 +171,78 @@ describe("MCP transport", () => {
 		);
 		expect(hidden.error?.code).toBe(-32_602);
 		expect(hidden.error?.message).toContain("manage:websites");
+	});
+
+	test("serves 2026-07-28 clients that discover instead of initializing", async () => {
+		const principal = createInternalPrincipal({
+			organizationId: "org-1",
+			scopes: ["read:data"],
+		});
+		const send = async (method: string, params: Record<string, unknown>) => {
+			const response = await handleDatabuddyMcpRequest({
+				apiKey: principal.apiKey,
+				organizationId: "org-1",
+				request: new Request("https://api.databuddy.test/v1/mcp", {
+					body: JSON.stringify({
+						id: 1,
+						jsonrpc: "2.0",
+						method,
+						params: {
+							...params,
+							_meta: {
+								"io.modelcontextprotocol/clientCapabilities": {},
+								"io.modelcontextprotocol/clientInfo": {
+									name: "Vercel-Connex",
+									version: "1.0",
+								},
+								"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							},
+						},
+					}),
+					headers: {
+						accept: "application/json, text/event-stream",
+						"content-type": "application/json",
+						"mcp-method": method,
+						"mcp-protocol-version": "2026-07-28",
+						...(typeof params.name === "string" && {
+							"mcp-name": params.name,
+						}),
+					},
+					method: "POST",
+				}),
+				requestHeaders: new Headers(),
+				userId: null,
+			});
+			expect(response.status).toBe(200);
+			return (await readMcpMessage(response)) as {
+				error?: { code: number; message: string };
+				result?: Record<string, unknown>;
+			};
+		};
+
+		const discovered = await send("server/discover", {});
+		expect(discovered.error).toBeUndefined();
+		expect(discovered.result).toMatchObject({
+			_meta: { "io.modelcontextprotocol/serverInfo": { name: "databuddy" } },
+			capabilities: { tools: {} },
+			instructions: expect.any(String),
+			supportedVersions: expect.arrayContaining(["2026-07-28"]),
+		});
+
+		const listed = await send("tools/list", {});
+		const names = (listed.result?.tools as { name: string }[]).map(
+			({ name }) => name
+		);
+		expect(names).toContain("list_websites");
+		expect(names).not.toContain("create_goal");
+
+		const called = await send("tools/call", {
+			arguments: { limit: 5000 },
+			name: "list_insights",
+		});
+		expect(readToolError(called.result as CallToolResult)).toMatchObject({
+			code: "invalid_input",
+		});
 	});
 
 	test("sends each tool call to basket with the raw error and the OAuth client name", async () => {
@@ -253,7 +300,7 @@ describe("MCP transport", () => {
 				expect.objectContaining({
 					clientName: "Claude",
 					durationMs: expect.any(Number),
-					error: "MCP error -32602: Unknown tool: no_such_tool",
+					error: "Unknown tool: no_such_tool",
 					errorCode: "-32602",
 					serverName: "databuddy",
 					tool: "no_such_tool",
@@ -327,7 +374,7 @@ async function listTools(
 		}),
 		requestHeaders: new Headers(),
 	});
-	const body = (await response.json()) as {
+	const body = (await readMcpMessage(response)) as {
 		result?: {
 			tools?: Array<{
 				annotations?: Record<string, boolean>;
@@ -979,7 +1026,6 @@ describe("investigation tools", () => {
 		});
 
 		expect(response.status).toBe(405);
-		expect(response.headers.get("allow")).toBe("POST");
 	});
 
 	test("publishes the investigation lifecycle to a website-scoped key", async () => {

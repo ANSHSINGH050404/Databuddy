@@ -8,7 +8,7 @@ import type { ApiScope } from "@databuddy/shared/api-scopes";
 import type {
 	CallToolResult,
 	ToolAnnotations,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/server";
 import { ORPCError } from "@orpc/server";
 import type { z } from "zod";
 import { trackAgentEvent } from "../../lib/databuddy";
