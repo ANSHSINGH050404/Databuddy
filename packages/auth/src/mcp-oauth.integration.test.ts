@@ -541,24 +541,27 @@ integration("MCP OAuth authorization round trip", () => {
 			access_token: string;
 		};
 
-		for (const accessToken of [initial.access_token, renewed]) {
-			const [, payload] = accessToken.split(".");
-			expect(payload).toBeTruthy();
-			const claims = JSON.parse(
-				Buffer.from(payload, "base64url").toString("utf8")
-			) as { aud: string | string[]; sub: string; scope: string } & Record<
-				string,
-				string
-			>;
-			expect([claims.aud].flat()).toContain(config.urls.mcp);
-			expect(
-				await getMcpAccessGrant(
+		const grants = await Promise.all(
+			[initial.access_token, renewed].map((accessToken) => {
+				const [, payload] = accessToken.split(".");
+				expect(payload).toBeTruthy();
+				const claims = JSON.parse(
+					Buffer.from(payload, "base64url").toString("utf8")
+				) as { aud: string | string[]; sub: string; scope: string } & Record<
+					typeof MCP_GRANT_CLAIM,
+					string
+				>;
+				expect([claims.aud].flat()).toContain(config.urls.mcp);
+				return getMcpAccessGrant(
 					claims.sub,
 					clientId,
 					claims[MCP_GRANT_CLAIM],
 					claims.scope.split(" ")
-				)
-			).toEqual({
+				);
+			})
+		);
+		for (const grant of grants) {
+			expect(grant).toEqual({
 				grant: { organizationId, websiteIds: [websiteId] },
 				scopes: ["read:data"],
 			});

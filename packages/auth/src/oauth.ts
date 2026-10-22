@@ -53,7 +53,9 @@ const mcpDefaultResource = {
 				matcher: (context) => context.path === "/oauth2/authorize",
 				handler: createAuthMiddleware((ctx) => {
 					const source = ctx.method === "POST" ? "body" : "query";
-					const params = ctx[source] as Record<string, unknown> | undefined;
+					const params = ctx[source] as
+						| { resource?: string | string[]; request_uri?: string }
+						| undefined;
 					return Promise.resolve(
 						params?.resource || params?.request_uri
 							? undefined
