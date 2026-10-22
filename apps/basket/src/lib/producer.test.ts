@@ -26,6 +26,7 @@ vi.mock("@lib/tracing", () => ({
 const { createEventProducer, TOPIC_MAP } = await import("./producer");
 
 const topicMap = {
+	"analytics-blocked-traffic": "analytics.blocked_traffic",
 	"analytics-custom-events": "analytics.custom_events",
 	"analytics-events": "analytics.events",
 };
@@ -36,7 +37,11 @@ const baseConfig: ProducerConfig = {
 	directFallbackTimeout: 1000,
 	healthProbeTimeout: 100,
 	kafkaTimeout: 1000,
+	lingerMs: 0,
+	maxBatchBytes: 512 * 1024,
+	maxBatchMessages: 500,
 	maxProducerRetries: 0,
+	maxQueuedMessages: 1000,
 	producerRetryDelay: 1,
 	reconnectCooldown: 1,
 	selfHost: true,
@@ -124,6 +129,16 @@ function createProducer({
 		topicMap,
 	});
 }
+
+const sentBatches = (send: Mock) =>
+	send.mock.calls.map((call) =>
+		(call[0] as { messages: { value: string }[] }).messages.map(
+			(message) => (JSON.parse(message.value) as { event_id: string }).event_id
+		)
+	);
+
+const sentMessageCount = (send: Mock) =>
+	sentBatches(send).reduce((total, batch) => total + batch.length, 0);
 
 const insertedToken = (insert: Mock, call: number) =>
 	(
@@ -323,7 +338,7 @@ describe("Kafka delivery", () => {
 		await Promise.all(deliveries);
 
 		expect(kafka.connect).toHaveBeenCalledOnce();
-		expect(kafka.send).toHaveBeenCalledTimes(50);
+		expect(sentMessageCount(kafka.send)).toBe(50);
 		expect(insert).not.toHaveBeenCalled();
 	});
 
@@ -442,6 +457,152 @@ describe("Kafka delivery", () => {
 	});
 });
 
+describe("Kafka batching", () => {
+	const holdFirstSend = () => {
+		const first = deferred<never[]>();
+		const send = vi
+			.fn()
+			.mockImplementationOnce(() => first.promise)
+			.mockResolvedValue([]);
+		return { first, kafka: fakeKafka({ send }) };
+	};
+
+	test("sends events that queue behind an in-flight request as one ordered batch", async () => {
+		const { first, kafka } = holdFirstSend();
+		const producer = createProducer({ config: withKafka, kafka });
+
+		const leading = run(producer.sendOne("analytics-events", event("e0")));
+		await vi.waitFor(() => expect(kafka.send).toHaveBeenCalledOnce());
+		const queued = Array.from({ length: 10 }, (_, i) =>
+			run(producer.sendOne("analytics-events", event(`e${i + 1}`)))
+		);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(kafka.send).toHaveBeenCalledOnce();
+
+		first.resolve([]);
+		await Promise.all([leading, ...queued]);
+
+		expect(sentBatches(kafka.send)).toEqual([
+			["e0"],
+			Array.from({ length: 10 }, (_, i) => `e${i + 1}`),
+		]);
+	});
+
+	test("caps each request at the batch message limit", async () => {
+		const { first, kafka } = holdFirstSend();
+		const producer = createProducer({
+			config: { ...withKafka, maxBatchMessages: 3 },
+			kafka,
+		});
+
+		const leading = run(producer.sendOne("analytics-events", event("e0")));
+		await vi.waitFor(() => expect(kafka.send).toHaveBeenCalledOnce());
+		const queued = Array.from({ length: 7 }, (_, i) =>
+			run(producer.sendOne("analytics-events", event(`e${i + 1}`)))
+		);
+		first.resolve([]);
+		await Promise.all([leading, ...queued]);
+
+		expect(sentBatches(kafka.send).map((batch) => batch.length)).toEqual([
+			1, 3, 3, 1,
+		]);
+	});
+
+	test("rejects a failed batch as ambiguous and sends events still queued to ClickHouse", async () => {
+		const { first, kafka } = holdFirstSend();
+		const insert = vi.fn(() => Promise.resolve());
+		const producer = createProducer({ config: withKafka, insert, kafka });
+
+		const inFlight = run(producer.sendOne("analytics-events", event("sent")));
+		await vi.waitFor(() => expect(kafka.send).toHaveBeenCalledOnce());
+		const queuedFallback = run(
+			producer.sendOne("analytics-events", event("queued"))
+		);
+		const queuedPinned = run(
+			producer.sendOne("analytics-events", event("pinned"), undefined, {
+				allowDirectFallback: false,
+			})
+		);
+		first.reject(new Error("request timed out"));
+
+		await expect(inFlight).rejects.toMatchObject({ _tag: "KafkaSendError" });
+		await queuedFallback;
+		await expect(queuedPinned).rejects.toMatchObject({
+			_tag: "ProducerUnavailableError",
+			retryable: true,
+		});
+		expect(kafka.send).toHaveBeenCalledOnce();
+		expect(insert).toHaveBeenCalledOnce();
+		expect(insert).toHaveBeenCalledWith(
+			expect.objectContaining({ values: [event("queued")] })
+		);
+	});
+
+	test("drops blocked traffic when its queue is full but falls back for real events", async () => {
+		const gate = deferred<never[]>();
+		const kafka = fakeKafka({ send: vi.fn(() => gate.promise) });
+		const insert = vi.fn(() => Promise.resolve());
+		const producer = createProducer({
+			config: { ...withKafka, kafkaTimeout: 5000, maxQueuedMessages: 2 },
+			insert,
+			kafka,
+		});
+
+		const send = (topic: string, id: string) =>
+			run(producer.sendOne(topic, event(id)));
+		const blocked = [send("analytics-blocked-traffic", "b0")];
+		const real = [send("analytics-events", "r0")];
+		await vi.waitFor(() => expect(kafka.send).toHaveBeenCalledTimes(2));
+		for (const i of [1, 2, 3]) {
+			blocked.push(send("analytics-blocked-traffic", `b${i}`));
+			real.push(send("analytics-events", `r${i}`));
+		}
+		await blocked[3];
+		await real[3];
+
+		expect(mockLogWarn).toHaveBeenCalledWith(
+			expect.objectContaining({ topic: "analytics-blocked-traffic" })
+		);
+		expect(insert).toHaveBeenCalledOnce();
+		expect(insert).toHaveBeenCalledWith(
+			expect.objectContaining({
+				table: "analytics.events",
+				values: [event("r3")],
+			})
+		);
+
+		gate.resolve([]);
+		await Promise.all([...blocked, ...real]);
+		const batches = sentBatches(kafka.send);
+		expect(batches).toHaveLength(4);
+		expect(batches).toEqual(
+			expect.arrayContaining([["b0"], ["r0"], ["b1", "b2"], ["r1", "r2"]])
+		);
+	});
+
+	test("starts the next request only after the previous send settles, even past its deadline", async () => {
+		const { first, kafka } = holdFirstSend();
+		const insert = vi.fn(() => Promise.resolve());
+		const producer = createProducer({
+			config: { ...withKafka, kafkaTimeout: 20, reconnectCooldown: 1 },
+			insert,
+			kafka,
+		});
+
+		await expect(
+			run(producer.sendOne("analytics-events", event("slow")))
+		).rejects.toMatchObject({ _tag: "KafkaSendError" });
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		const next = run(producer.sendOne("analytics-events", event("next")));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(kafka.send).toHaveBeenCalledOnce();
+
+		first.resolve([]);
+		await next;
+		expect(sentMessageCount(kafka.send) + insert.mock.calls.length).toBe(2);
+	});
+});
+
 describe("health check", () => {
 	test("probes live broker metadata on every check", async () => {
 		const kafka = fakeKafka();
@@ -469,7 +630,9 @@ describe("health check", () => {
 			config: withKafka,
 			kafka: fakeKafka(),
 			kafkaAdmin: fakeAdmin({
-				listTopics: vi.fn(() => Promise.resolve(["analytics-events"])),
+				listTopics: vi.fn(() =>
+					Promise.resolve(["analytics-blocked-traffic", "analytics-events"])
+				),
 			}),
 		});
 

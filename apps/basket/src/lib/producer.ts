@@ -4,7 +4,7 @@ import { clickHouse, TABLE_NAMES } from "@databuddy/db/clickhouse";
 import { readBooleanEnv } from "@databuddy/env/app";
 import { PRODUCER_DRAIN_TIMEOUT_MS } from "@lib/shutdown-budget";
 import { captureError, record } from "@lib/tracing";
-import { Data, Deferred, Effect, Ref } from "effect";
+import { Data, Deferred, Effect, Exit, Ref } from "effect";
 import { createError, log } from "evlog";
 import {
 	type Admin,
@@ -21,7 +21,11 @@ export interface ProducerConfig {
 	directFallbackTimeout: number;
 	healthProbeTimeout: number;
 	kafkaTimeout: number;
+	lingerMs: number;
+	maxBatchBytes: number;
+	maxBatchMessages: number;
 	maxProducerRetries: number;
+	maxQueuedMessages: number;
 	password?: string;
 	producerRetryDelay: number;
 	reconnectCooldown: number;
@@ -83,6 +87,11 @@ class UnknownKafkaTopicError extends Data.TaggedError(
 	readonly retryable: false;
 	readonly topic: string;
 }> {}
+class KafkaQueueAbortedError extends Data.TaggedError(
+	"KafkaQueueAbortedError"
+)<{
+	readonly topic: string;
+}> {}
 class ClickHouseFallbackError extends Data.TaggedError(
 	"ClickHouseFallbackError"
 )<{
@@ -131,7 +140,27 @@ const INITIAL_STATE: ProducerState = {
 	shuttingDown: false,
 };
 
+interface PendingSend {
+	readonly bytes: number;
+	readonly done: Deferred.Deferred<
+		void,
+		KafkaQueueAbortedError | KafkaSendError
+	>;
+	readonly messages: Message[];
+}
+
+interface TopicQueue {
+	bytes: number;
+	count: number;
+	flushing: boolean;
+	items: PendingSend[];
+}
+
 const ASYNC_INSERT_BUSY_TIMEOUT_MS = 2000;
+const SHED_REPORT_INTERVAL_MS = 10_000;
+// Blocked traffic is diagnostic; when the send queue is full it is dropped
+// so a bot flood cannot crowd out real events.
+const SHEDDABLE_TOPICS = new Set(["analytics-blocked-traffic"]);
 
 const TOPIC_ERROR_TYPES = new Set([
 	"INVALID_TOPIC_EXCEPTION",
@@ -458,6 +487,9 @@ export function createEventProducer({
 	const unacknowledgedCount = () =>
 		Array.from(unacknowledgedSends.values()).reduce((total, n) => total + n, 0);
 	const topicFailedAt = new Map<string, number>();
+	const queues = new Map<string, TopicQueue>();
+	let shedSinceReport = 0;
+	let shedReportedAt = 0;
 
 	const withinCooldown = (failedAt: number | null) =>
 		failedAt !== null && Date.now() - failedAt < config.reconnectCooldown;
@@ -717,36 +749,140 @@ export function createEventProducer({
 		);
 	};
 
-	const sendToKafka = (
+	const takeBatch = (queue: TopicQueue): PendingSend[] => {
+		let count = 0;
+		let bytes = 0;
+		let taken = 0;
+		for (const item of queue.items) {
+			const full =
+				count + item.messages.length > config.maxBatchMessages ||
+				bytes + item.bytes > config.maxBatchBytes;
+			if (taken > 0 && full) {
+				break;
+			}
+			count += item.messages.length;
+			bytes += item.bytes;
+			taken++;
+		}
+		queue.count -= count;
+		queue.bytes -= bytes;
+		return queue.items.splice(0, taken);
+	};
+
+	const abortQueued = (topic: string, queue: TopicQueue) =>
+		Effect.gen(function* () {
+			const aborted = new KafkaQueueAbortedError({ topic });
+			for (const item of queue.items.splice(0)) {
+				yield* Deferred.fail(item.done, aborted);
+			}
+			queue.count = 0;
+			queue.bytes = 0;
+		});
+
+	// One request per topic is in flight at a time; whatever queues meanwhile
+	// becomes the next request, so batches grow with load and stay at one
+	// message when traffic is light.
+	const flushTopic = (
+		kafkaProducer: KafkaProducer,
+		topic: string,
+		queue: TopicQueue
+	): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			while (queue.items.length > 0) {
+				if (config.lingerMs > 0 && queue.count < config.maxBatchMessages) {
+					yield* Effect.sleep(`${config.lingerMs} millis`);
+				}
+				const batch = takeBatch(queue);
+				const messages = batch.flatMap((item) => item.messages);
+				const send = kafkaProducer.send({
+					topic,
+					messages,
+					timeout: config.kafkaTimeout,
+					compression: CompressionTypes.GZIP,
+				});
+				const forget = () => unacknowledgedSends.delete(send);
+				send.then(forget, forget);
+				const outcome = yield* Effect.exit(
+					Effect.tryPromise({
+						try: (signal) =>
+							withDeadline(send, {
+								message: `Redpanda send acknowledgement exceeded ${config.kafkaTimeout}ms`,
+								onAbandon: () => {
+									unacknowledgedSends.set(send, messages.length);
+								},
+								signal,
+								timeoutMs: config.kafkaTimeout,
+							}),
+						catch: (e) => new KafkaSendError({ topic, cause: toError(e) }),
+					}).pipe(
+						Effect.asVoid,
+						Effect.catchTag("KafkaSendError", (err) =>
+							rejectSend(err, messages.length)
+						)
+					)
+				);
+				for (const item of batch) {
+					yield* Deferred.done(item.done, outcome);
+				}
+				if (Exit.isFailure(outcome)) {
+					yield* abortQueued(topic, queue);
+				}
+				yield* Effect.promise(() =>
+					send.then(
+						() => undefined,
+						() => undefined
+					)
+				);
+			}
+			queue.flushing = false;
+		});
+
+	const enqueue = (
 		kafkaProducer: KafkaProducer,
 		topic: string,
 		messages: Message[]
-	): Effect.Effect<void, KafkaSendError> =>
-		Effect.suspend(() => {
-			const send = kafkaProducer.send({
+	): Effect.Effect<PendingSend["done"] | null> =>
+		Effect.sync(() => {
+			let queue = queues.get(topic);
+			if (!queue) {
+				queue = { bytes: 0, count: 0, flushing: false, items: [] };
+				queues.set(topic, queue);
+			}
+			if (queue.count + messages.length > config.maxQueuedMessages) {
+				return null;
+			}
+			let bytes = 0;
+			for (const message of messages) {
+				bytes += typeof message.value === "string" ? message.value.length : 0;
+			}
+			const done = Deferred.makeUnsafe<
+				void,
+				KafkaQueueAbortedError | KafkaSendError
+			>();
+			queue.items.push({ bytes, done, messages });
+			queue.count += messages.length;
+			queue.bytes += bytes;
+			if (!queue.flushing) {
+				queue.flushing = true;
+				Effect.runFork(flushTopic(kafkaProducer, topic, queue));
+			}
+			return done;
+		});
+
+	const reportShed = (topic: string) =>
+		Effect.sync(() => {
+			shedSinceReport++;
+			const now = Date.now();
+			if (now - shedReportedAt < SHED_REPORT_INTERVAL_MS) {
+				return;
+			}
+			log.warn({
+				message: "Redpanda send queue is full; dropping low-priority events",
+				dropped: shedSinceReport,
 				topic,
-				messages,
-				timeout: config.kafkaTimeout,
-				compression: CompressionTypes.GZIP,
 			});
-			const forget = () => unacknowledgedSends.delete(send);
-			send.then(forget, forget);
-			return Effect.tryPromise({
-				try: (signal) =>
-					withDeadline(send, {
-						message: `Redpanda send acknowledgement exceeded ${config.kafkaTimeout}ms`,
-						onAbandon: () => {
-							unacknowledgedSends.set(send, messages.length);
-						},
-						signal,
-						timeoutMs: config.kafkaTimeout,
-					}),
-				catch: (e) => new KafkaSendError({ topic, cause: toError(e) }),
-			}).pipe(
-				Effect.catchTag("KafkaSendError", (err) =>
-					rejectSend(err, messages.length)
-				)
-			);
+			shedSinceReport = 0;
+			shedReportedAt = now;
 		});
 
 	const deliver = (
@@ -768,7 +904,20 @@ export function createEventProducer({
 					topicFailedAt.get(topic) ?? null
 				);
 				if (producer && topicAvailable && (yield* connect)) {
-					return yield* sendToKafka(producer, topic, messages);
+					const queued = yield* enqueue(producer, topic, messages);
+					if (queued) {
+						const sent = yield* Deferred.await(queued).pipe(
+							Effect.as(true),
+							Effect.catchTag("KafkaQueueAbortedError", () =>
+								Effect.succeed(false)
+							)
+						);
+						if (sent) {
+							return;
+						}
+					} else if (SHEDDABLE_TOPICS.has(topic)) {
+						return yield* reportShed(topic);
+					}
 				}
 				if (options.allowDirectFallback === false) {
 					return yield* Effect.fail(
@@ -972,7 +1121,7 @@ function createKafkaClients(
 				retries: config.maxProducerRetries,
 				maxRetryTime: 3000,
 			},
-			idempotent: true,
+			idempotent: false,
 			maxInFlightRequests: 15,
 		}),
 	};
@@ -986,7 +1135,11 @@ const PRODUCER_CONFIG: ProducerConfig = {
 	reconnectCooldown: 60_000,
 	connectTimeout: 4000,
 	kafkaTimeout: 10_000,
+	lingerMs: 0,
+	maxBatchBytes: 512 * 1024,
+	maxBatchMessages: 500,
 	maxProducerRetries: 3,
+	maxQueuedMessages: 20_000,
 	producerRetryDelay: 300,
 	chunkSize: 5000,
 	directFallbackTimeout: 4000,
