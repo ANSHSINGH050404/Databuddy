@@ -43,26 +43,6 @@ export const insightQueries = {
 			retry: 2,
 			retryDelay: (attempt: number) => Math.min(2000 * 2 ** attempt, 15_000),
 		}),
-	historyInfinite: (orgId: string | undefined, status?: "open" | "resolved") =>
-		infiniteQueryOptions({
-			queryKey: [...INSIGHTS_ROOT, "history-infinite", orgId, status] as const,
-			queryFn: ({ pageParam }) =>
-				fetchInsightsHistoryPage(
-					orgId ?? "",
-					pageParam,
-					HISTORY_PAGE_SIZE,
-					status
-				),
-			initialPageParam: 0,
-			getNextPageParam: (lastPage, _allPages, lastPageParam) =>
-				lastPage.hasMore ? lastPageParam + HISTORY_PAGE_SIZE : undefined,
-			enabled: !!orgId,
-			staleTime: INSIGHT_CACHE.historyStaleTime,
-			gcTime: INSIGHT_CACHE.gcTime,
-			refetchOnWindowFocus: false,
-			retry: 2,
-			retryDelay: (attempt: number) => Math.min(2000 * 2 ** attempt, 15_000),
-		}),
 	inbox: (organizationId: string | undefined) =>
 		queryOptions({
 			queryKey: [...INSIGHTS_ROOT, "inbox", organizationId] as const,
@@ -131,23 +111,6 @@ export const BRIEF_NEXT_LABELS: Record<
 	ask: "Needs your input",
 	watch: "Measuring",
 };
-
-function fetchInsightsHistoryPage(
-	organizationId: string,
-	offset: number,
-	limit = 50,
-	status?: "open" | "resolved"
-) {
-	return orpc.insights.history.call({
-		organizationId,
-		limit,
-		offset,
-		status,
-	});
-}
-
-type InsightsHistoryPage = Awaited<ReturnType<typeof fetchInsightsHistoryPage>>;
-export type Insight = InsightsHistoryPage["insights"][number];
 
 function fetchInsightById(insightId: string) {
 	return orpc.insights.getById.call({ insightId });

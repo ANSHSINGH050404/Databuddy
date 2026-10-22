@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { EmptyState } from "@databuddy/ui";
 import { GlobeIcon } from "@databuddy/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
-import { type ReactNode, useCallback, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { TopBar } from "@/components/layout/top-bar";
 import { useOrganizationsContext } from "@/components/providers/organizations-provider";
 import { useWebsitesLight } from "@/hooks/use-websites";
@@ -52,17 +52,17 @@ export function InsightsShell({ children }: { children: ReactNode }) {
 		!websitesLoading && websites !== undefined && websites.length === 0;
 	const inbox = useInbox();
 	const suggestions = useSuggestions();
-	const refreshInsights = useCallback(() => {
-		queryClient
-			.invalidateQueries({ queryKey: insightQueries.all() })
-			.catch(() => undefined);
-	}, [queryClient]);
 	const latestRunTracker = useRef<{
 		organizationId: string;
 		terminalRunId: string | null;
 	} | null>(null);
 
 	useEffect(() => {
+		const refreshInsights = () => {
+			queryClient
+				.invalidateQueries({ queryKey: insightQueries.all() })
+				.catch(() => undefined);
+		};
 		if (!organizationId) {
 			latestRunTracker.current = null;
 			return;
@@ -95,7 +95,7 @@ export function InsightsShell({ children }: { children: ReactNode }) {
 			terminalRunId: run.id,
 		};
 		refreshInsights();
-	}, [latestRun.data, latestRun.isSuccess, organizationId, refreshInsights]);
+	}, [latestRun.data, latestRun.isSuccess, organizationId, queryClient]);
 
 	const isAnalyzing = isActiveRun(latestRun.data?.status);
 

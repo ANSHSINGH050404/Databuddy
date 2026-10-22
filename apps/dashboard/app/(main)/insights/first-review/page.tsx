@@ -3,15 +3,10 @@
 import { isSelfHosted } from "@databuddy/env/public";
 import { SELF_HOSTED_INVESTIGATIONS_MESSAGE } from "@databuddy/shared/billing";
 
-import {
-	useInfiniteQuery,
-	useMutation,
-	useQuery,
-	useQueryClient,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useOrganizationsContext } from "@/components/providers/organizations-provider";
 import {
 	useBillingContext,
@@ -25,15 +20,7 @@ import {
 import { APP_EVENTS, trackAppEvent } from "@/lib/app-events";
 import { orpc } from "@/lib/orpc";
 import { cn } from "@/lib/utils";
-import {
-	Badge,
-	Button,
-	Card,
-	dayjs,
-	EmptyState,
-	fromNow,
-	guessTimezone,
-} from "@databuddy/ui";
+import { Badge, Button, Card, EmptyState, fromNow } from "@databuddy/ui";
 import {
 	ArrowRightIcon,
 	CheckCircleIcon,
@@ -47,7 +34,6 @@ import {
 } from "@databuddy/ui/icons";
 import { Accordion } from "@databuddy/ui/client";
 import { toast } from "sonner";
-import { showErrorToast } from "@/lib/user-facing-error";
 import { InboxEmptyPane } from "../_components/inbox";
 
 const PERIOD_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
@@ -58,14 +44,6 @@ const PERIOD_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
 });
 
 export default function FirstReviewPage() {
-	return (
-		<Suspense fallback={null}>
-			<FirstReviewContent />
-		</Suspense>
-	);
-}
-
-function FirstReviewContent() {
 	const { activeOrganization, activeOrganizationId } =
 		useOrganizationsContext();
 	const organizationId =
@@ -74,10 +52,6 @@ function FirstReviewContent() {
 	const firstReviewWebsiteId = searchParams.get("website")?.trim() || undefined;
 	const { canUse: canUseInvestigations, fixedPrice } = useInvestigationUsage();
 	const { isLoading: billingLoading } = useBillingContext();
-	const reviewSchedule = useReviewScheduleEmptyState(
-		organizationId,
-		!firstReviewWebsiteId
-	);
 	const firstReview = useQuery({
 		...orpc.insightGeneration.getFirstReviewReadiness.queryOptions({
 			input: {
@@ -147,7 +121,7 @@ function FirstReviewContent() {
 		meta: { suppressGlobalErrorToast: true },
 		refetchInterval: (query) => {
 			const status = query.state.data;
-			return isFirstReviewStatusActive(status?.state) ||
+			return isFirstReviewActive(status?.state) ||
 				(reusedFirstReviewRunId &&
 					status?.activeOrganizationRunId === reusedFirstReviewRunId)
 				? 2000
@@ -176,9 +150,7 @@ function FirstReviewContent() {
 					? null
 					: reusedRunReachedTerminalState || !reusedRunIsStillActive
 						? "updating"
-						: reusedRunIsStillActive
-							? "waiting"
-							: "updating";
+						: "waiting";
 	const needsFirstReviewRefresh = Boolean(
 		!(hasStartedFirstReview || reusedFirstReviewRunId) &&
 			firstReviewStatusState === "not_started" &&
@@ -200,8 +172,7 @@ function FirstReviewContent() {
 		firstReviewStatus.data?.canRun ?? firstReview.data?.canRun ?? false;
 	const firstReviewRunId = latestFirstReviewRun?.id;
 	const showFirstReviewFindings =
-		!firstReviewWebsiteId ||
-		(isFirstReviewComplete(firstReviewState) && Boolean(firstReviewRunId));
+		isFirstReviewComplete(firstReviewState) && Boolean(firstReviewRunId);
 	const brief = useInfiniteQuery({
 		...insightQueries.briefInfinite(
 			organizationId,
@@ -288,74 +259,57 @@ function FirstReviewContent() {
 
 	return (
 		<div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-4 sm:gap-5 sm:p-6">
-			{firstReviewWebsiteId ? (
-				<FirstReview
-					billingLoading={billingLoading}
-					canRun={canRunFirstReview}
-					canUseCredits={canUseInvestigations}
-					fixedPrice={fixedPrice}
-					error={
-						firstReview.isError ||
-						(shouldPollFirstReviewStatus && firstReviewStatus.isError)
+			<FirstReview
+				billingLoading={billingLoading}
+				canRun={canRunFirstReview}
+				canUseCredits={canUseInvestigations}
+				fixedPrice={fixedPrice}
+				error={
+					firstReview.isError ||
+					(shouldPollFirstReviewStatus && firstReviewStatus.isError)
+				}
+				isLoading={firstReview.isLoading}
+				needsRefresh={needsFirstReviewRefresh}
+				reusedRunState={reusedRunState}
+				onRetry={() => {
+					firstReview.refetch().catch(() => undefined);
+					if (shouldPollFirstReviewStatus) {
+						firstReviewStatus.refetch().catch(() => undefined);
 					}
-					isLoading={firstReview.isLoading}
-					needsRefresh={needsFirstReviewRefresh}
-					reusedRunState={reusedRunState}
-					onRetry={() => {
-						firstReview.refetch().catch(() => undefined);
-						if (shouldPollFirstReviewStatus) {
-							firstReviewStatus.refetch().catch(() => undefined);
-						}
+				}}
+				onRun={() => {
+					if (!organizationId) {
+						return;
+					}
+					triggerFirstReview.mutate({
+						organizationId,
+						websiteIds: [firstReviewWebsiteId],
+					});
+				}}
+				latestRun={latestFirstReviewRun}
+				readiness={firstReview.data}
+				state={firstReviewState}
+				websiteId={firstReviewWebsiteId}
+			/>
+			{showFirstReviewFindings ? (
+				<InsightBrief
+					hasNextPage={brief.hasNextPage ?? false}
+					insights={insights}
+					isFetchingNextPage={brief.isFetchingNextPage}
+					onLoadMoreAction={() => {
+						brief.fetchNextPage().catch(() => undefined);
 					}}
-					onRun={() => {
-						if (!organizationId) {
-							return;
-						}
-						triggerFirstReview.mutate({
-							organizationId,
-							websiteIds: [firstReviewWebsiteId],
-						});
+					onRetryAction={() => {
+						brief.refetch().catch(() => undefined);
 					}}
-					latestRun={latestFirstReviewRun}
-					readiness={firstReview.data}
-					state={firstReviewState}
-					websiteId={firstReviewWebsiteId}
+					state={
+						brief.isLoading
+							? "loading"
+							: insights.length === 0 && brief.isError
+								? "error"
+								: "ready"
+					}
 				/>
-			) : null}
-			{firstReviewWebsiteId ? (
-				showFirstReviewFindings ? (
-					<InsightBrief
-						description="Findings from this review only."
-						emptyAction={reviewSchedule.action}
-						emptyDescription={
-							isFirstReviewComplete(firstReviewState)
-								? "The review found nothing that needs your attention."
-								: reviewSchedule.description
-						}
-						emptyTitle={
-							isFirstReviewComplete(firstReviewState)
-								? "No material findings"
-								: reviewSchedule.title
-						}
-						hasNextPage={brief.hasNextPage ?? false}
-						insights={insights}
-						isFetchingNextPage={brief.isFetchingNextPage}
-						onLoadMoreAction={() => {
-							brief.fetchNextPage().catch(() => undefined);
-						}}
-						onRetryAction={() => {
-							brief.refetch().catch(() => undefined);
-						}}
-						state={
-							brief.isLoading
-								? "loading"
-								: insights.length === 0 && brief.isError
-									? "error"
-									: "ready"
-						}
-						title="First review findings"
-					/>
-				) : null
 			) : null}
 		</div>
 	);
@@ -676,11 +630,7 @@ const FIRST_REVIEW_STATUSES = {
 	}
 >;
 
-function isFirstReviewActive(state: FirstReviewState | undefined) {
-	return state === "running" || state === "waiting_for_organization_run";
-}
-
-function isFirstReviewStatusActive(state: string | undefined) {
+function isFirstReviewActive(state: string | undefined) {
 	return state === "running" || state === "waiting_for_organization_run";
 }
 
@@ -698,100 +648,20 @@ function formatFirstReviewDate(value: string) {
 	return PERIOD_DATE_FORMATTER.format(new Date(value));
 }
 
-function useReviewScheduleEmptyState(
-	organizationId: string | undefined,
-	enabled: boolean
-): { action?: ReactNode; description?: string; title?: string } {
-	const queryClient = useQueryClient();
-	const { canUserUpgrade, isLoading: billingLoading } = useBillingContext();
-	const { hasAccess } = useInvestigationUsage();
-	const config = useQuery({
-		...orpc.insightGeneration.getConfig.queryOptions({
-			input: { organizationId },
-		}),
-		enabled: Boolean(organizationId) && enabled && !isSelfHosted,
-	});
-	const enableReviews = useMutation({
-		...orpc.insightGeneration.upsertConfig.mutationOptions(),
-		onError: (error) =>
-			showErrorToast(error, "Failed to turn on weekly reviews"),
-		meta: { suppressGlobalErrorToast: true },
-		onSuccess: () =>
-			queryClient.invalidateQueries({
-				queryKey: orpc.insightGeneration.key(),
-			}),
-	});
-
-	if (
-		!enabled ||
-		isSelfHosted ||
-		billingLoading ||
-		!hasAccess ||
-		!config.data
-	) {
-		return {};
-	}
-	if (config.data.enabled) {
-		return config.data.nextRunAt
-			? {
-					description: `Your next review runs ${dayjs(config.data.nextRunAt).format("dddd, MMM D")}.`,
-				}
-			: {};
-	}
-	if (!canUserUpgrade) {
-		return {
-			description:
-				"Ask an owner or admin to turn on weekly reviews so Databunny can tell you what changed on your sites.",
-			title: "Automatic reviews are off",
-		};
-	}
-	return {
-		action: (
-			<Button
-				loading={enableReviews.isPending}
-				onClick={() =>
-					enableReviews.mutate({
-						enabled: true,
-						frequency: "weekly",
-						organizationId,
-						timezone: guessTimezone(),
-					})
-				}
-				size="sm"
-			>
-				Turn on weekly reviews
-			</Button>
-		),
-		description:
-			"Turn on weekly reviews and Databunny will tell you what changed on your sites and what to do next.",
-		title: "Automatic reviews are off",
-	};
-}
-
 function InsightBrief({
-	description,
-	emptyAction,
-	emptyDescription,
-	emptyTitle,
 	hasNextPage,
 	insights,
 	isFetchingNextPage,
 	onLoadMoreAction,
 	onRetryAction,
 	state,
-	title,
 }: {
-	description: string;
-	emptyAction?: ReactNode;
-	emptyDescription?: string;
-	emptyTitle?: string;
 	hasNextPage: boolean;
 	insights: BriefInsight[];
 	isFetchingNextPage: boolean;
 	onLoadMoreAction: () => void;
 	onRetryAction: () => void;
 	state: "error" | "loading" | "ready";
-	title: string;
 }) {
 	let content: ReactNode;
 	if (state === "loading") {
@@ -825,13 +695,9 @@ function InsightBrief({
 		content = (
 			<div className="px-5 py-8">
 				<EmptyState
-					action={emptyAction}
-					description={
-						emptyDescription ??
-						"Noteworthy changes, improvements, and recoveries will appear here."
-					}
+					description="The review found nothing that needs your attention."
 					icon={<LightbulbIcon />}
-					title={emptyTitle ?? "No insights yet"}
+					title="No material findings"
 					variant="minimal"
 				/>
 			</div>
@@ -862,11 +728,14 @@ function InsightBrief({
 	}
 
 	return (
-		<Card aria-label={title} className="border-border/70 shadow-sm">
+		<Card
+			aria-label="First review findings"
+			className="border-border/70 shadow-sm"
+		>
 			<Card.Header className="border-b bg-card px-5 py-4 sm:px-6">
-				<Card.Title>{title}</Card.Title>
+				<Card.Title>First review findings</Card.Title>
 				<Card.Description aria-live="polite" className="mt-1">
-					{description}
+					Findings from this review only.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content className="p-0">{content}</Card.Content>

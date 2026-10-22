@@ -319,7 +319,7 @@ function ThreadRow({
 	);
 }
 
-export function suggestionHref(id: string): string {
+function suggestionHref(id: string): string {
 	return `/insights/recommendations?${new URLSearchParams({ id })}`;
 }
 
@@ -333,7 +333,7 @@ export function useSuggestions() {
 	);
 }
 
-export function suggestionStatus(item: InsightRecommendationItem): string {
+function suggestionStatus(item: InsightRecommendationItem): string {
 	if (item.saved) {
 		return item.saved.deleted
 			? "Saved, then removed"

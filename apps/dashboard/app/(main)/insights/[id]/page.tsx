@@ -94,8 +94,8 @@ export default function InsightDetailPage() {
 	const latestIndex = items.findLastIndex(
 		(item) => item.kind === "investigation"
 	);
-	const latest =
-		latestIndex >= 0 ? (items[latestIndex] as InvestigationItem) : null;
+	const latestItem = items[latestIndex];
+	const latest = latestItem?.kind === "investigation" ? latestItem : null;
 	const earlier = latestIndex > 0 ? items.slice(0, latestIndex) : [];
 	const since = latestIndex >= 0 ? items.slice(latestIndex + 1) : items;
 	const replies = since.filter(

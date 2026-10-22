@@ -5,20 +5,11 @@ import { Button, dayjs, EmptyState, Skeleton } from "@databuddy/ui";
 import { ArrowLeftIcon, LightbulbIcon } from "@databuddy/ui/icons";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
 import { InboxEmptyPane } from "../_components/inbox";
 import { investigationSourceLink } from "../_components/investigation-row";
 import { useSuggestions } from "../_components/thread-list";
 
 export default function RecommendationsPage() {
-	return (
-		<Suspense fallback={null}>
-			<RecommendationPane />
-		</Suspense>
-	);
-}
-
-function RecommendationPane() {
 	const id = useSearchParams().get("id");
 	const query = useSuggestions();
 	if (!id) {
