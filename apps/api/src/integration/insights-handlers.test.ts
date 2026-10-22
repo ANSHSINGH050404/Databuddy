@@ -1962,8 +1962,8 @@ describe("insight inbox", () => {
 			await db()
 				.insert(insightReplies)
 				.values({
-					authorId: member.id,
-					authorName: "Member",
+					authorId: null,
+					authorName: "Ada via Slack",
 					body: "Yes, we paused it on Monday.",
 					createdAt: at(8),
 					id: randomUUIDv7(),
@@ -2017,9 +2017,14 @@ describe("insight inbox", () => {
 			expect(
 				after.threads.find((thread) => thread.id === ids.manual)
 			).toMatchObject({ need: null, state: "watching" });
-			await expect(
-				call(appRouter.insights.markDone, context)({ insightId: ids.ask })
-			).rejects.toThrow("no open action");
+			await expectCode(
+				call(appRouter.insights.markDone, context)({ insightId: ids.manual }),
+				"CONFLICT"
+			);
+			await expectCode(
+				call(appRouter.insights.markDone, context)({ insightId: ids.ask }),
+				"BAD_REQUEST"
+			);
 		}
 	);
 });

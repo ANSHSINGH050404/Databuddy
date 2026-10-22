@@ -1099,45 +1099,41 @@ export const insightTimelineReplySchema = z.object({
 	status: insightReplyStatusSchema,
 });
 
-export const insightInboxNeedSchema = z.enum([
-	"answer",
-	"apply",
-	"done",
-	"look",
-]);
-export const insightInboxStateSchema = z.enum([
-	"needs_you",
-	"watching",
-	"resolved",
-]);
+const insightInboxNeedSchema = z.enum(["answer", "apply", "done", "look"]);
+const insightInboxStateSchema = z.enum(["needs_you", "watching", "resolved"]);
 
-export const insightInboxThreadSchema = z.object({
-	entity: investigationEntitySchema,
-	id: z.string(),
-	lastActivityAt: z.string(),
-	lastActivityBy: z.enum(["databuddy", "team"]),
-	latestObservationId: z.string(),
-	need: insightInboxNeedSchema.nullable(),
-	next: z.object({
-		executable: z.boolean(),
-		recheckAt: z.string().nullable(),
-		text: z.string(),
-		type: z.enum(["act", "ask", "resolve", "watch"]),
-		verificationStatus: z.enum(["passed", "failed", "inconclusive"]).nullable(),
-	}),
-	pendingReply: z
-		.object({ status: z.enum(["queued", "running", "failed"]) })
-		.nullable(),
-	resolvedReason: z.enum(["recovered", "stale"]).nullable(),
-	severity: insightSeveritySchema,
-	state: insightInboxStateSchema,
-	status: z.enum(["open", "resolved"]),
-	summary: z.string(),
-	title: z.string(),
-	websiteDomain: z.string(),
-	websiteId: z.string(),
-	websiteName: z.string().nullable(),
-});
+export const insightInboxThreadSchema = historyInsightSchema
+	.pick({
+		id: true,
+		resolvedReason: true,
+		severity: true,
+		status: true,
+		title: true,
+		websiteDomain: true,
+		websiteId: true,
+		websiteName: true,
+	})
+	.extend({
+		entity: investigationEntitySchema,
+		lastActivityAt: z.string(),
+		lastActivityBy: z.enum(["databuddy", "team"]),
+		latestObservationId: z.string(),
+		need: insightInboxNeedSchema.nullable(),
+		next: z.object({
+			executable: z.boolean(),
+			recheckAt: z.string().nullable(),
+			text: z.string(),
+			type: z.enum(["act", "ask", "resolve", "watch"]),
+			verificationStatus: investigationOutcomeSchema.shape.verification
+				.unwrap()
+				.shape.status.nullable(),
+		}),
+		pendingReply: z
+			.object({ status: insightReplyStatusSchema.exclude(["succeeded"]) })
+			.nullable(),
+		state: insightInboxStateSchema,
+		summary: z.string(),
+	});
 
 export type InsightInboxThread = z.infer<typeof insightInboxThreadSchema>;
 export type InsightInboxNeed = z.infer<typeof insightInboxNeedSchema>;

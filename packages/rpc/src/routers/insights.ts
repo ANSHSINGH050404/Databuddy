@@ -526,6 +526,7 @@ async function loadInsightInbox(input: {
 		db
 			.select({
 				authorId: insightReplies.authorId,
+				authorName: insightReplies.authorName,
 				createdAt: insightReplies.createdAt,
 				insightId: insightReplies.insightId,
 				intent: insightReplies.intent,
@@ -560,8 +561,13 @@ async function loadInsightInbox(input: {
 		const after = caseReplies.filter(
 			(reply) => reply.createdAt >= latest.createdAt
 		);
+		const isTeamReply = (reply: (typeof caseReplies)[number]) =>
+			reply.authorId !== null || reply.authorName !== "Databuddy";
 		const answered = after.some(
-			(reply) => reply.authorId && reply.intent !== "verification"
+			(reply) =>
+				isTeamReply(reply) &&
+				reply.intent !== "verification" &&
+				reply.status !== "failed"
 		);
 		const verifying = after.some((reply) => reply.intent === "verification");
 		const pendingReply =
@@ -574,15 +580,9 @@ async function loadInsightInbox(input: {
 		const inFlight =
 			pendingReply?.status === "queued" || pendingReply?.status === "running";
 		const executable =
-			outcome.next.type === "act" &&
-			Boolean(outcome.next.execution) &&
+			executableDefinitionAction(outcome) !== null &&
 			(signal.entity.type === "goal" || signal.entity.type === "funnel");
-		const verificationStatus =
-			outcome.verification?.status === "passed" ||
-			outcome.verification?.status === "failed" ||
-			outcome.verification?.status === "inconclusive"
-				? outcome.verification.status
-				: null;
+		const verificationStatus = outcome.verification?.status ?? null;
 		let need: InsightInboxThread["need"] = null;
 		if (row.status === "open" && !inFlight) {
 			if (verificationStatus === "failed") {
@@ -595,7 +595,7 @@ async function loadInsightInbox(input: {
 		}
 		const lastReplyAt = newest?.createdAt ?? null;
 		const teamLast = Boolean(
-			newest && newest.authorId && newest.createdAt > latest.createdAt
+			newest && isTeamReply(newest) && newest.createdAt > latest.createdAt
 		);
 		threads.push({
 			entity: signal.entity,
@@ -619,7 +619,7 @@ async function loadInsightInbox(input: {
 				verificationStatus,
 			},
 			pendingReply,
-			resolvedReason: row.resolvedReason ?? null,
+			resolvedReason: row.resolvedReason,
 			severity: row.severity,
 			state:
 				row.status === "resolved"
@@ -1750,62 +1750,126 @@ export const insightsRouter = {
 		.input(z.object({ insightId: z.string().min(1) }))
 		.output(z.object({ reply: insightTimelineReplySchema }))
 		.handler(async ({ context, input }) => {
-			const [insight] = await selectInsights()
-				.where(eq(analyticsInsights.id, input.insightId))
+			const [target] = await db
+				.select({
+					organizationId: analyticsInsights.organizationId,
+					subjectKey: analyticsInsights.subjectKey,
+					websiteId: analyticsInsights.websiteId,
+				})
+				.from(analyticsInsights)
+				.innerJoin(websites, eq(analyticsInsights.websiteId, websites.id))
+				.where(
+					and(
+						eq(analyticsInsights.id, input.insightId),
+						isNull(websites.deletedAt)
+					)
+				)
 				.limit(1);
-			if (!insight) {
-				throw rpcError.notFound("Investigation not found");
+			if (!target) {
+				throw rpcError.notFound("investigation", input.insightId);
 			}
 			await withWorkspace(context, {
 				allowCrossOrg: true,
-				organizationId: insight.organizationId,
+				organizationId: target.organizationId,
 				permissions: ["update"],
-				websiteId: insight.websiteId,
+				websiteId: target.websiteId,
 			});
-			setAuditOrganization(context, insight.organizationId);
+			setAuditOrganization(context, target.organizationId);
 			requireHostedInvestigations();
-			const [latest] = await db
-				.select({
-					id: insightObservations.id,
-					outcome: insightObservations.outcome,
-				})
-				.from(insightObservations)
-				.where(eq(insightObservations.insightId, insight.id))
-				.orderBy(
-					desc(insightObservations.createdAt),
-					desc(insightObservations.id)
-				)
-				.limit(1);
-			const outcome = latest ? parseInvestigationOutcome(latest.outcome) : null;
-			if (!(latest && outcome && outcome.next.type === "act")) {
-				throw rpcError.badRequest(
-					"This investigation has no open action to mark as done."
-				);
-			}
 			const author = replyAuthor(context);
-			const createdAt = new Date();
-			const id = randomUUIDv7();
-			const body = `Marked as done: ${outcome.next.action}`;
-			await db.insert(insightReplies).values({
-				...author,
-				body,
-				createdAt,
-				id,
-				insightId: insight.id,
-				intent: "verification",
-				sourceObservationId: latest.id,
-				status: "queued",
+			const rate = await ratelimit(
+				`insights:reply:${target.organizationId}:${author.authorId ?? `apikey:${context.apiKey?.id}`}`,
+				20,
+				60
+			);
+			if (!rate.success) {
+				throw rpcError.rateLimited(rate.reset);
+			}
+			const reply = await db.transaction(async (tx) => {
+				const [current] = await tx
+					.select({
+						id: analyticsInsights.id,
+						status: analyticsInsights.status,
+					})
+					.from(analyticsInsights)
+					.where(
+						and(
+							eq(analyticsInsights.organizationId, target.organizationId),
+							eq(analyticsInsights.websiteId, target.websiteId),
+							eq(analyticsInsights.subjectKey, target.subjectKey)
+						)
+					)
+					.orderBy(
+						desc(analyticsInsights.createdAt),
+						desc(analyticsInsights.id)
+					)
+					.limit(1)
+					.for("update");
+				if (
+					!current ||
+					current.id !== input.insightId ||
+					current.status !== "open"
+				) {
+					throw rpcError.conflict(
+						"This investigation changed before it could be marked as done. Refresh the page and try again."
+					);
+				}
+				const [latest] = await tx
+					.select({
+						id: insightObservations.id,
+						outcome: insightObservations.outcome,
+					})
+					.from(insightObservations)
+					.where(eq(insightObservations.insightId, current.id))
+					.orderBy(
+						desc(insightObservations.createdAt),
+						desc(insightObservations.id)
+					)
+					.limit(1)
+					.for("update");
+				const outcome = parseInvestigationOutcome(latest?.outcome);
+				if (!(latest && outcome?.next.type === "act")) {
+					throw rpcError.badRequest(
+						"This investigation has no open action to mark as done."
+					);
+				}
+				const [activeReply] = await tx
+					.select({ id: insightReplies.id })
+					.from(insightReplies)
+					.where(
+						and(
+							eq(insightReplies.insightId, current.id),
+							inArray(insightReplies.status, ["queued", "running"])
+						)
+					)
+					.limit(1);
+				if (activeReply) {
+					throw rpcError.conflict(
+						"Databuddy is already checking this investigation. Wait for it to finish and try again."
+					);
+				}
+				const row = {
+					...author,
+					body: `Marked as done: ${outcome.next.action}`,
+					createdAt: new Date(),
+					id: randomUUIDv7(),
+					insightId: current.id,
+					intent: "verification",
+					sourceObservationId: latest.id,
+					status: "queued",
+				} as const;
+				await tx.insert(insightReplies).values(row);
+				return row;
 			});
-			const status = await queueInsightReply(id);
 			return {
 				reply: {
-					author: author.authorName,
-					body,
-					createdAt: createdAt.toISOString(),
-					id,
-					intent: "verification" as const,
-					kind: "reply" as const,
-					status,
+					author: reply.authorName,
+					body: reply.body,
+					createdAt: reply.createdAt.toISOString(),
+					id: reply.id,
+					intent: reply.intent,
+					kind: "reply",
+					status: await queueInsightReply(reply.id),
 				},
 			};
 		}),
