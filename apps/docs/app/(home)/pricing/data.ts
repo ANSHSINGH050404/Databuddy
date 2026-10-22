@@ -45,6 +45,14 @@ export interface RawPlan {
 	positioning?: string | null;
 }
 
+export const PLAN_SUPPORT: Partial<Record<string, string>> = {
+	free: "Community",
+	hobby: "Email",
+	pro: "Priority email",
+	intelligence: "Priority email + Slack",
+	intelligence_scale: "Priority email + Slack",
+};
+
 const INVESTIGATION_FEATURE: RawFeature = {
 	id: INVESTIGATION_USAGE.featureId,
 	name: INVESTIGATION_USAGE.name,

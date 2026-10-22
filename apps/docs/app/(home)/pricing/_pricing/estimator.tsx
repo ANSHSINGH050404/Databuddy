@@ -1,7 +1,7 @@
+import { Button } from "@databuddy/ui";
 import { CaretDownIcon } from "@databuddy/ui/icons";
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { SciFiButton } from "@/components/landing/scifi-btn";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -180,10 +180,7 @@ export function Estimator({ plans }: Props) {
 										needs.
 									</p>
 									<div className="mt-4 flex justify-end">
-										<SciFiButton
-											asChild
-											className="transition-opacity duration-150 hover:animate-none hover:bg-foreground/10 focus-visible:bg-foreground/10 active:scale-100 active:bg-foreground/15 active:opacity-80"
-										>
+										<Button asChild variant="secondary">
 											<Link
 												href="/contact"
 												onClick={() =>
@@ -195,7 +192,7 @@ export function Estimator({ plans }: Props) {
 											>
 												Contact us
 											</Link>
-										</SciFiButton>
+										</Button>
 									</div>
 								</>
 							) : (
@@ -265,10 +262,7 @@ export function Estimator({ plans }: Props) {
 										Estimate before taxes. Databunny chat runs on AI credits.
 									</p>
 									<div className="mt-4 flex justify-end">
-										<SciFiButton
-											asChild
-											className="transition-opacity duration-150 hover:animate-none hover:bg-foreground/10 focus-visible:bg-foreground/10 active:scale-100 active:bg-foreground/15 active:opacity-80"
-										>
+										<Button asChild>
 											<Link
 												href={`https://app.databuddy.cc/register${bestPlan ? `?plan=${bestPlan.id}` : ""}`}
 												onClick={() =>
@@ -282,7 +276,7 @@ export function Estimator({ plans }: Props) {
 											>
 												Get started
 											</Link>
-										</SciFiButton>
+										</Button>
 									</div>
 								</>
 							)}

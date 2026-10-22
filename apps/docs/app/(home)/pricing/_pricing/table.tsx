@@ -1,6 +1,7 @@
+import { Button } from "@databuddy/ui";
 import Link from "next/link";
-import { SciFiButton } from "@/components/landing/scifi-btn";
 import { SciFiCard } from "@/components/scifi-card";
+import { PLAN_SUPPORT } from "../data";
 import { formatMoney } from "./estimator-utils";
 import { GatedFeaturePricingRows } from "./gated-feature-rows";
 import { trackPricingPlanClick } from "./track-pricing";
@@ -70,14 +71,7 @@ export function PlansComparisonTable({ plans }: { plans: NormalizedPlan[] }) {
 		},
 		{
 			name: "Support",
-			value: (plan: NormalizedPlan) =>
-				({
-					free: "Community",
-					hobby: "Email",
-					pro: "Priority email",
-					intelligence: "Priority email + Slack",
-					intelligence_scale: "Priority email + Slack",
-				})[plan.id] ?? "Custom",
+			value: (plan: NormalizedPlan) => PLAN_SUPPORT[plan.id] ?? "Custom",
 		},
 	];
 	return (
@@ -173,9 +167,13 @@ export function PlansComparisonTable({ plans }: { plans: NormalizedPlan[] }) {
 								<td className="px-4 py-3 sm:px-5 lg:px-6" />
 								{columns.map((plan) => (
 									<td className={cellClass(plan.id)} key={plan.id}>
-										<SciFiButton
+										<Button
 											asChild
-											className="hover:animate-none hover:bg-foreground/10 focus-visible:bg-foreground/10 active:bg-foreground/15"
+											variant={
+												plan.id === RECOMMENDED_PLAN_ID
+													? "primary"
+													: "secondary"
+											}
 										>
 											<Link
 												aria-label={`${plan.id === "enterprise" ? "Contact us about" : "Get started with"} ${plan.name}`}
@@ -195,7 +193,7 @@ export function PlansComparisonTable({ plans }: { plans: NormalizedPlan[] }) {
 													? "Contact us"
 													: "Get started"}
 											</Link>
-										</SciFiButton>
+										</Button>
 									</td>
 								))}
 							</tr>
