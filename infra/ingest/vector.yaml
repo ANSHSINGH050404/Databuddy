@@ -1,6 +1,11 @@
 acknowledgements:
   enabled: true
 
+# Serves GET /health for the platform's readiness check.
+api:
+  enabled: true
+  address: "0.0.0.0:8686"
+
 log_schema:
   # Keep Kafka record time separate from the analytics event's immutable time.
   timestamp_key: kafka_timestamp

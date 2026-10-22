@@ -1,4 +1,4 @@
-FROM timberio/vector:0.58.0-alpine
+FROM timberio/vector:0.60.0-alpine
 
 ENV VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true
 
