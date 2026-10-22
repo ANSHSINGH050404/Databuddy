@@ -177,6 +177,10 @@ export async function handleDatabuddyMcpRequest(
 		enableJsonResponse: true,
 	});
 
+	transport.onerror = (error) => {
+		mergeWideEvent({ mcp_transport_error: error.message });
+	};
+
 	try {
 		await server.connect(transport);
 		return await transport.handleRequest(options.request, {
