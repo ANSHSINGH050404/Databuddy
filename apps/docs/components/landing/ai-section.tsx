@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@databuddy/ui";
 import { ArrowRightIcon } from "@databuddy/ui/icons";
 import { SiClaude } from "@icons-pack/react-simple-icons";
 import { useReducedMotion } from "motion/react";
@@ -8,7 +9,6 @@ import { useEffect, useMemo, useState } from "react";
 import { SectionBullet } from "../icons/section-bullet";
 import { InvestigationStage } from "./databunny-demo-visuals";
 import { useTimeline } from "./demo-primitives";
-import { SciFiButton } from "./scifi-btn";
 import { cn } from "@/lib/utils";
 
 interface TerminalCall {
@@ -352,9 +352,9 @@ export function AiSection() {
 					</p>
 
 					<div className="mt-6 flex flex-wrap items-center gap-4">
-						<SciFiButton asChild>
+						<Button asChild variant="secondary">
 							<Link href="/docs/api/mcp">Set up MCP</Link>
-						</SciFiButton>
+						</Button>
 						<Link
 							className="inline-flex items-center gap-1 text-muted-foreground text-sm transition-colors hover:text-foreground"
 							href="/docs/api"

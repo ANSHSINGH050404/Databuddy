@@ -1,5 +1,5 @@
 const backgroundFlow = () => (
-	<div className="pointer-events-none absolute -top-20 right-0 bottom-0 left-0 overflow-hidden lg:top-0 lg:bottom-8 lg:rounded-3xl">
+	<div className="pointer-events-none absolute -top-20 right-0 bottom-0 left-0 overflow-hidden opacity-50 lg:top-0 lg:bottom-8 lg:rounded-3xl">
 		<svg
 			className="h-full w-full"
 			fill="none"

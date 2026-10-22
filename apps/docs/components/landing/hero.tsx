@@ -238,8 +238,8 @@ export default function Hero() {
 								src="/brand/bunny/off-black.svg"
 								width={160}
 							/>
-							<span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 scale-0 whitespace-nowrap rounded-lg border border-border bg-card px-3 py-1.5 font-mono text-foreground text-xs shadow-lg transition-all duration-200 group-hover/bunny:scale-100">
-								ask Databunny
+							<span className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-card px-3 py-1.5 font-mono text-foreground text-xs shadow-lg transition-colors duration-200 ease-in-out group-hover/bunny:border-foreground/30">
+								Ask Databunny, the AI analyst
 							</span>
 						</Link>
 						<div

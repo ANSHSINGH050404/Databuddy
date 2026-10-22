@@ -50,11 +50,11 @@ const BentoCard = ({
 						<Icon className="size-4 text-muted-foreground" />
 					</div>
 					<div className="flex flex-col gap-0.5">
-						<CardTitle className="font-medium text-foreground text-sm">
+						<CardTitle className="font-semibold text-foreground text-xl">
 							{title}
 						</CardTitle>
 						{description && (
-							<p className="text-muted-foreground text-xs">{description}</p>
+							<p className="text-muted-foreground text-sm">{description}</p>
 						)}
 					</div>
 				</div>
@@ -130,7 +130,7 @@ const FunnelsFeature = () => (
 	<div className="flex w-full min-w-0 flex-col">
 		<div className="mb-4 flex items-center justify-between">
 			<div className="space-y-1">
-				<div className="font-medium text-3xl text-foreground tracking-tighter">
+				<div className="font-medium text-foreground text-lg tracking-tight">
 					13%
 				</div>
 				<div className="text-muted-foreground text-xs">Conversion rate</div>
@@ -202,7 +202,7 @@ const RealTimeFeature = ({ live }: { live: boolean }) => {
 					<span className="text-muted-foreground text-xs">Live users</span>
 				</div>
 				<Count
-					className="font-medium font-mono text-2xl text-foreground tracking-tighter"
+					className="font-medium font-mono text-foreground text-lg tracking-tight"
 					value={liveUsers}
 				/>
 			</div>
