@@ -53,16 +53,3 @@ export function rejectInvalidMcpOrigin(request: Request): Response | undefined {
 		{ status: 403 }
 	);
 }
-
-export function rejectUnsupportedMcpMethod(
-	request: Request
-): Response | undefined {
-	if (
-		!isMcpRequest(request) ||
-		request.method === "POST" ||
-		request.method === "OPTIONS"
-	) {
-		return;
-	}
-	return new Response(null, { status: 405, headers: { Allow: "POST" } });
-}

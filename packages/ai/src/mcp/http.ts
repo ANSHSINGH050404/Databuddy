@@ -6,9 +6,13 @@ import {
 import { config } from "@databuddy/env/app";
 import { readBooleanEnv } from "@databuddy/env/boolean";
 import { trackMcp } from "@databuddy/sdk/mcp";
+import { resolveDeployCommit } from "@databuddy/shared/evlog-redaction";
 import {
+	bearerAuthChallengeResponse,
 	createMcpHandler,
 	McpServer,
+	OAuthError,
+	OAuthErrorCode,
 	ProtocolError,
 	ProtocolErrorCode,
 	type Tool,
@@ -30,7 +34,10 @@ export interface DatabuddyMcpHttpOptions extends McpRequestContext {
 	request: Request;
 }
 
-const MCP_AUTH_CHALLENGE = `Bearer realm="databuddy", resource_metadata="${new URL("/.well-known/oauth-protected-resource", config.urls.mcp).href}"`;
+const RESOURCE_METADATA_URL = new URL(
+	"/.well-known/oauth-protected-resource",
+	config.urls.mcp
+).href;
 const MAX_MCP_REQUEST_BYTES = 1_048_576;
 
 export function createMcpErrorResponse(
@@ -48,11 +55,12 @@ export function createMcpErrorResponse(
 export function createMcpUnauthorizedResponse(): Response {
 	mergeWideEvent({ mcp_auth: "unauthorized" });
 
-	return createMcpErrorResponse(
-		401,
-		-32_001,
-		"Authentication required. Use OAuth 2.1, or x-api-key / Authorization: Bearer with a valid Databuddy API key.",
-		{ "WWW-Authenticate": MCP_AUTH_CHALLENGE }
+	return bearerAuthChallengeResponse(
+		new OAuthError(
+			OAuthErrorCode.InvalidToken,
+			"Authentication required. Use OAuth 2.1, or x-api-key / Authorization: Bearer with a valid Databuddy API key."
+		),
+		{ resourceMetadataUrl: RESOURCE_METADATA_URL }
 	);
 }
 
@@ -78,11 +86,9 @@ function createMcpServer(options: DatabuddyMcpHttpOptions): McpServer {
 	const server = new McpServer(
 		{
 			name: "databuddy",
-			version: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? "1.0.0",
+			version: resolveDeployCommit()?.slice(0, 7) ?? "1.0.0",
 		},
-		{
-			instructions: MCP_INSTRUCTIONS,
-		}
+		{ capabilities: { tools: {} }, instructions: MCP_INSTRUCTIONS }
 	);
 
 	if (!readBooleanEnv("SELFHOST")) {
@@ -97,25 +103,22 @@ function createMcpServer(options: DatabuddyMcpHttpOptions): McpServer {
 
 	const allTools = createMcpTools(options);
 	const tools = allTools.filter((tool) => callerCanCallTool(options, tool));
-	if (tools.length) {
-		server.server.registerCapabilities({ tools: { listChanged: true } });
-		server.server.setRequestHandler("tools/list", () => ({
-			tools: tools.map(toListedTool),
-		}));
-		server.server.setRequestHandler("tools/call", ({ params }, ctx) => {
-			const tool = tools.find(({ name }) => name === params.name);
-			if (tool) {
-				return tool.handler(params.arguments, { signal: ctx.mcpReq.signal });
-			}
-			const hidden = allTools.find(({ name }) => name === params.name);
-			throw new ProtocolError(
-				ProtocolErrorCode.InvalidParams,
-				hidden
-					? `Tool ${params.name} requires scopes: ${hidden.metadata.access.scopes.join(", ")}. Reconnect or use an API key that has them.`
-					: `Unknown tool: ${params.name}`
-			);
-		});
-	}
+	server.server.setRequestHandler("tools/list", () => ({
+		tools: tools.map(toListedTool),
+	}));
+	server.server.setRequestHandler("tools/call", ({ params }, ctx) => {
+		const tool = tools.find(({ name }) => name === params.name);
+		if (tool) {
+			return tool.handler(params.arguments, { signal: ctx.mcpReq.signal });
+		}
+		const hidden = allTools.find(({ name }) => name === params.name);
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
+			hidden
+				? `Tool ${params.name} requires scopes: ${hidden.metadata.access.scopes.join(", ")}. Reconnect or use an API key that has them.`
+				: `Unknown tool: ${params.name}`
+		);
+	});
 	return server;
 }
 

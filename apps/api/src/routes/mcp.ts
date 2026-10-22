@@ -14,11 +14,7 @@ import { config } from "@databuddy/env/app";
 import { cacheable } from "@databuddy/redis";
 import { createMcpProtectedRequestHandler } from "@better-auth/mcp";
 import { Elysia } from "elysia";
-import {
-	MCP_PATHS,
-	readMcpOAuthToken,
-	rejectUnsupportedMcpMethod,
-} from "@/http/cors";
+import { MCP_PATHS, readMcpOAuthToken } from "@/http/cors";
 import { resolveRequestAuth } from "@/lib/auth-wide-event";
 import { ApiKeyInFlightGate } from "@/middleware/api-key-rate-limit";
 
@@ -227,7 +223,6 @@ async function handleOAuthMcpRequest(
 }
 
 export const mcp = new Elysia({ name: "mcp" })
-	.onRequest(({ request }) => rejectUnsupportedMcpMethod(request))
 	.resolve(async ({ request }) => {
 		const oauthAccessToken = verifyOAuthMcpRequest
 			? readMcpOAuthToken(request)

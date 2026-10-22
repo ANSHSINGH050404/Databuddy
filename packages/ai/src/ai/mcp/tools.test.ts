@@ -71,10 +71,7 @@ describe("MCP transport", () => {
 		expect(response.headers.get("www-authenticate")).toContain(
 			"/.well-known/oauth-protected-resource"
 		);
-		expect(await readMcpMessage(response)).toMatchObject({
-			id: null,
-			jsonrpc: "2.0",
-		});
+		expect(await response.json()).toMatchObject({ error: "invalid_token" });
 	});
 
 	test("stops reading a body without Content-Length once it passes 1 MB", async () => {
@@ -1009,25 +1006,6 @@ describe("investigation tools", () => {
 			idempotentHint: true,
 			readOnlyHint: false,
 		});
-	});
-
-	test("rejects unsupported standalone SSE methods", async () => {
-		const principal = createInternalPrincipal({
-			organizationId: "org-1",
-			scopes: ["read:data"],
-		});
-		const response = await handleDatabuddyMcpRequest({
-			apiKey: principal.apiKey,
-			organizationId: "org-1",
-			request: new Request("https://api.databuddy.test/v1/mcp", {
-				headers: { accept: "text/event-stream" },
-				method: "GET",
-			}),
-			requestHeaders: new Headers(),
-			userId: null,
-		});
-
-		expect(response.status).toBe(405);
 	});
 
 	test("publishes the investigation lifecycle to a website-scoped key", async () => {
