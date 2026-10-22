@@ -10,21 +10,32 @@ const logger = createToolLogger("Feedback Tools");
 const RATE_LIMIT_ATTEMPTS = 5;
 const RATE_LIMIT_WINDOW_SECONDS = 3600;
 
-export const feedbackCategorySchema = z.enum([
-	"bug_report",
-	"feature_request",
-	"ux_improvement",
-	"performance",
-	"documentation",
-	"other",
-]);
-
-const submitFeedbackInputSchema = z.object({
-	title: z.string().min(3).max(200),
-	description: z.string().min(10).max(5000),
-	category: feedbackCategorySchema,
+export const submitFeedbackInputSchema = z.object({
+	title: z.string().trim().min(3).max(200).describe("Short summary."),
+	description: z
+		.string()
+		.trim()
+		.min(10)
+		.max(5000)
+		.describe(
+			"The user's words plus context: the page or feature, what they expected, and what happened."
+		),
+	category: z
+		.enum([
+			"bug_report",
+			"feature_request",
+			"ux_improvement",
+			"performance",
+			"documentation",
+			"other",
+		])
+		.describe("Kind of feedback."),
 	websiteId: z.string().optional(),
-	errorDetails: z.string().max(2000).optional(),
+	errorDetails: z
+		.string()
+		.max(2000)
+		.optional()
+		.describe("Exact error text, if any."),
 });
 
 interface ResolvedFeedbackWebsite {

@@ -132,7 +132,7 @@ export async function handleDatabuddyMcpRequest(
 	const server = new McpServer(
 		{
 			name: "databuddy",
-			version: "1.0.0",
+			version: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? "1.0.0",
 		},
 		{
 			instructions: MCP_INSTRUCTIONS,
@@ -144,8 +144,6 @@ export async function handleDatabuddyMcpRequest(
 			beforeSend: (call) => ({
 				...call,
 				clientName: call.clientName ?? options.clientName,
-				serverVersion:
-					process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? call.serverVersion,
 			}),
 		});
 	}

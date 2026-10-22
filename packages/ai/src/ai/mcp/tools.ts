@@ -23,7 +23,7 @@ import {
 	planUserTargeting,
 	userTargetingFields,
 } from "../tools/flags";
-import { feedbackCategorySchema } from "../tools/feedback";
+import { submitFeedbackInputSchema } from "../tools/feedback";
 import { funnelFields } from "../tools/funnels";
 import { goalFields } from "../tools/goals";
 import { runInvestigationAction } from "../tools/investigations";
@@ -1706,26 +1706,9 @@ const submitFeedbackTool = defineMcpTool(
 		name: "submit_feedback",
 		description:
 			"Send a bug report, feature request, or blocking error about Databuddy itself to the Databuddy team. Call only after the user asks or agrees to send it. Problems on the user's own website are analytics questions.",
-		inputSchema: z.object({
-			...WebsiteSelectorSchema,
-			title: z.string().trim().min(3).max(200).describe("Short summary."),
-			description: z
-				.string()
-				.trim()
-				.min(10)
-				.max(5000)
-				.describe(
-					"The user's words plus context: the page or feature, what they expected, and what happened."
-				),
-			category: feedbackCategorySchema.describe(
-				"bug_report, feature_request, ux_improvement, performance, documentation, or other."
-			),
-			errorDetails: z
-				.string()
-				.max(2000)
-				.optional()
-				.describe("Exact error text, if any."),
-		}),
+		inputSchema: submitFeedbackInputSchema
+			.omit({ websiteId: true })
+			.extend(WebsiteSelectorSchema),
 		outputSchema: z.object({
 			success: z.literal(true),
 			message: z.string(),
