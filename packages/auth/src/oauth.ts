@@ -5,6 +5,8 @@ import { isUniqueViolationFor } from "@databuddy/db";
 import { config } from "@databuddy/env/app";
 import { API_SCOPES } from "@databuddy/shared/api-scopes";
 import { MCP_API_SCOPES } from "@databuddy/shared/mcp-access";
+import type { BetterAuthPlugin } from "better-auth";
+import { createAuthMiddleware } from "better-auth/api";
 import { betterAuth } from "better-auth/minimal";
 import { jwt } from "better-auth/plugins";
 import { log } from "evlog";
@@ -40,6 +42,33 @@ const database: typeof baseAuthOptions.database = (options) => {
 
 const IDENTITY_SCOPES = ["openid", "profile", "email", "offline_access"];
 
+// Clients such as Vercel Connect omit the RFC 8707 resource, which otherwise
+// yields an opaque token the MCP server cannot verify. Defaulting it at
+// authorization stores it with the code, so the code and refresh grants inherit it.
+const mcpDefaultResource = {
+	id: "mcp-default-resource",
+	hooks: {
+		before: [
+			{
+				matcher: (context) => context.path === "/oauth2/authorize",
+				handler: createAuthMiddleware((ctx) => {
+					const source = ctx.method === "POST" ? "body" : "query";
+					const params = ctx[source] as Record<string, unknown> | undefined;
+					return Promise.resolve(
+						params?.resource || params?.request_uri
+							? undefined
+							: {
+									context: {
+										[source]: { ...params, resource: config.urls.mcp },
+									},
+								}
+					);
+				}),
+			},
+		],
+	},
+} satisfies BetterAuthPlugin;
+
 function createMcpOAuthPlugins() {
 	try {
 		return [
@@ -60,6 +89,7 @@ function createMcpOAuthPlugins() {
 				metadataProfile: "mcp-2026-07-28",
 			}),
 			mcpConsentAccess,
+			mcpDefaultResource,
 		];
 	} catch (error) {
 		log.warn({

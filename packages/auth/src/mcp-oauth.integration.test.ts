@@ -470,6 +470,101 @@ integration("MCP OAuth authorization round trip", () => {
 		}
 	});
 
+	test("binds tokens to the MCP resource when the client omits it, as Vercel Connect does", async () => {
+		const clientId = publishMetadataDocument("Resourceless Client");
+		const codeVerifier = base64Url(randomBytes(32));
+		const authorize = await auth.handler(
+			new Request(
+				`${baseURL}/api/auth/oauth2/authorize?${new URLSearchParams({
+					client_id: clientId,
+					response_type: "code",
+					redirect_uri: redirectUri,
+					code_challenge: base64Url(
+						createHash("sha256").update(codeVerifier).digest()
+					),
+					code_challenge_method: "S256",
+					scope: "read:data offline_access",
+				})}`,
+				{ headers: { cookie, origin: baseURL } }
+			)
+		);
+		expect(authorize.headers.get("location")).toContain("/consent");
+		const consent = await auth.handler(
+			new Request(`${baseURL}/api/auth/oauth2/consent`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					origin: baseURL,
+					cookie,
+				},
+				body: JSON.stringify({
+					accept: true,
+					oauth_query: (authorize.headers.get("location") ?? "").split("?")[1],
+					organizationId,
+					websiteIds: [websiteId],
+				}),
+			})
+		);
+		expect(consent.status).toBe(200);
+		const { url: callback } = (await consent.json()) as { url: string };
+		const exchange = (body: Record<string, string>) =>
+			auth.handler(
+				new Request(`${baseURL}/api/auth/oauth2/token`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/x-www-form-urlencoded",
+						origin: baseURL,
+					},
+					body: new URLSearchParams({
+						client_id: clientId,
+						...body,
+					}).toString(),
+				})
+			);
+		const token = await exchange({
+			grant_type: "authorization_code",
+			code: new URL(callback).searchParams.get("code") as string,
+			redirect_uri: redirectUri,
+			code_verifier: codeVerifier,
+		});
+		expect(token.status).toBe(200);
+		const initial = (await token.json()) as {
+			access_token: string;
+			refresh_token: string;
+		};
+		const refreshed = await exchange({
+			grant_type: "refresh_token",
+			refresh_token: initial.refresh_token,
+		});
+		expect(refreshed.status).toBe(200);
+		const { access_token: renewed } = (await refreshed.json()) as {
+			access_token: string;
+		};
+
+		for (const accessToken of [initial.access_token, renewed]) {
+			const [, payload] = accessToken.split(".");
+			expect(payload).toBeTruthy();
+			const claims = JSON.parse(
+				Buffer.from(payload, "base64url").toString("utf8")
+			) as { aud: string | string[]; sub: string; scope: string } & Record<
+				string,
+				string
+			>;
+			expect([claims.aud].flat()).toContain(config.urls.mcp);
+			expect(
+				await getMcpAccessGrant(
+					claims.sub,
+					clientId,
+					claims[MCP_GRANT_CLAIM],
+					claims.scope.split(" ")
+				)
+			).toEqual({
+				grant: { organizationId, websiteIds: [websiteId] },
+				scopes: ["read:data"],
+			});
+		}
+	});
+
 	test("rejects invalid selections, scope elevation, and a tampered authorization query", async () => {
 		const { client_id: clientId } = await auth.api.adminCreateOAuthClient({
 			headers: { cookie },
