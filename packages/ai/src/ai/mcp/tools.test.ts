@@ -1,7 +1,11 @@
 import { createInternalPrincipal } from "@databuddy/rpc";
 import type { ApiScope } from "@databuddy/shared/api-scopes";
 import { MCP_API_SCOPES } from "@databuddy/shared/mcp-access";
-import type { CallToolResult } from "@modelcontextprotocol/server";
+import type {
+	CallToolResult,
+	DiscoverResult,
+	ListToolsResult,
+} from "@modelcontextprotocol/server";
 import { ORPCError } from "@orpc/server";
 import { describe, expect, spyOn, test } from "bun:test";
 import { z } from "zod";
@@ -35,15 +39,22 @@ function readToolError(result: CallToolResult): unknown {
 	return (JSON.parse(content.text) as { error: unknown }).error;
 }
 
-async function readMcpMessage(response: Response): Promise<unknown> {
+interface McpMessage<T> {
+	error?: { code: number; message: string };
+	id?: number | string | null;
+	jsonrpc: "2.0";
+	result?: T;
+}
+
+async function readMcpMessage<T>(response: Response): Promise<McpMessage<T>> {
 	if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-		return response.json();
+		return response.json() as Promise<McpMessage<T>>;
 	}
 	const data = (await response.text())
 		.split("\n")
 		.filter((line) => line.startsWith("data:"))
 		.at(-1);
-	return JSON.parse(data?.slice(5) ?? "null");
+	return JSON.parse(data?.slice(5) ?? "null") as McpMessage<T>;
 }
 
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
@@ -113,10 +124,10 @@ describe("MCP transport", () => {
 			requestHeaders: new Headers(),
 			userId: "user-1",
 		});
-		const body = (await readMcpMessage(response)) as { result: CallToolResult };
+		const body = await readMcpMessage<CallToolResult>(response);
 
 		expect(response.status).toBe(200);
-		expect(readToolError(body.result)).toMatchObject({
+		expect(body.result && readToolError(body.result)).toMatchObject({
 			code: "invalid_input",
 		});
 	});
@@ -146,10 +157,7 @@ describe("MCP transport", () => {
 				requestHeaders: new Headers(),
 				userId: oauth ? null : "user-1",
 			});
-			return (await readMcpMessage(response)) as {
-				error?: { code: number; message: string };
-				result?: CallToolResult;
-			};
+			return readMcpMessage<CallToolResult>(response);
 		};
 
 		for (const params of [
@@ -178,7 +186,10 @@ describe("MCP transport", () => {
 			organizationId: "org-1",
 			scopes: ["read:data"],
 		});
-		const send = async (method: string, params: Record<string, unknown>) => {
+		const send = async <T>(
+			method: string,
+			params: { arguments?: { limit: number }; name?: string }
+		) => {
 			const response = await handleDatabuddyMcpRequest({
 				apiKey: principal.apiKey,
 				organizationId: "org-1",
@@ -204,9 +215,7 @@ describe("MCP transport", () => {
 						"content-type": "application/json",
 						"mcp-method": method,
 						"mcp-protocol-version": "2026-07-28",
-						...(typeof params.name === "string" && {
-							"mcp-name": params.name,
-						}),
+						...(params.name && { "mcp-name": params.name }),
 					},
 					method: "POST",
 				}),
@@ -214,13 +223,10 @@ describe("MCP transport", () => {
 				userId: null,
 			});
 			expect(response.status).toBe(200);
-			return (await readMcpMessage(response)) as {
-				error?: { code: number; message: string };
-				result?: Record<string, unknown>;
-			};
+			return readMcpMessage<T>(response);
 		};
 
-		const discovered = await send("server/discover", {});
+		const discovered = await send<DiscoverResult>("server/discover", {});
 		expect(discovered.error).toBeUndefined();
 		expect(discovered.result).toMatchObject({
 			_meta: { "io.modelcontextprotocol/serverInfo": { name: "databuddy" } },
@@ -229,18 +235,16 @@ describe("MCP transport", () => {
 			supportedVersions: expect.arrayContaining(["2026-07-28"]),
 		});
 
-		const listed = await send("tools/list", {});
-		const names = (listed.result?.tools as { name: string }[]).map(
-			({ name }) => name
-		);
+		const listed = await send<ListToolsResult>("tools/list", {});
+		const names = listed.result?.tools.map(({ name }) => name);
 		expect(names).toContain("list_websites");
 		expect(names).not.toContain("create_goal");
 
-		const called = await send("tools/call", {
+		const called = await send<CallToolResult>("tools/call", {
 			arguments: { limit: 5000 },
 			name: "list_insights",
 		});
-		expect(readToolError(called.result as CallToolResult)).toMatchObject({
+		expect(called.result && readToolError(called.result)).toMatchObject({
 			code: "invalid_input",
 		});
 	});
@@ -374,18 +378,16 @@ async function listTools(
 		}),
 		requestHeaders: new Headers(),
 	});
-	const body = (await readMcpMessage(response)) as {
-		result?: {
-			tools?: Array<{
-				annotations?: Record<string, boolean>;
-				inputSchema: {
-					properties?: Record<string, { description?: string }>;
-				};
-				name: string;
-				outputSchema?: Record<string, unknown>;
-			}>;
-		};
-	};
+	const body = await readMcpMessage<{
+		tools?: Array<{
+			annotations?: Record<string, boolean>;
+			inputSchema: {
+				properties?: Record<string, { description?: string }>;
+			};
+			name: string;
+			outputSchema?: Record<string, unknown>;
+		}>;
+	}>(response);
 	return {
 		response,
 		tools: body.result?.tools ?? [],
