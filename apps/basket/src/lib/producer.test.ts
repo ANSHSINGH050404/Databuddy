@@ -23,7 +23,9 @@ vi.mock("@lib/tracing", () => ({
 	record: <T>(_name: string, fn: () => Promise<T>) => fn(),
 }));
 
-const { createEventProducer, TOPIC_MAP } = await import("./producer");
+const { createEventProducer, KAFKA_PRODUCER_OPTIONS, TOPIC_MAP } = await import(
+	"./producer"
+);
 
 const topicMap = {
 	"analytics-blocked-traffic": "analytics.blocked_traffic",
@@ -292,6 +294,18 @@ describe("direct ClickHouse delivery", () => {
 			expect.objectContaining({ message: "Unknown Kafka topic" }),
 			{ topic: "analytics-unmapped" }
 		);
+	});
+});
+
+describe("Kafka producer options", () => {
+	test("keeps the settings KafkaJS requires for idempotent production", () => {
+		// Drift guard, not a snapshot: KafkaJS refuses to start an idempotent
+		// producer without acks=-1, and the protocol allows five in-flight
+		// requests per partition. Both guard the fix for events being stored
+		// twice when an acknowledgement is lost and the batch is retried.
+		expect(KAFKA_PRODUCER_OPTIONS.idempotent).toBe(true);
+		expect(KAFKA_PRODUCER_OPTIONS.acks).toBe(-1);
+		expect(KAFKA_PRODUCER_OPTIONS.maxInFlightRequests).toBeLessThanOrEqual(5);
 	});
 });
 

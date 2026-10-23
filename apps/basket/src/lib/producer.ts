@@ -1064,6 +1064,26 @@ export function createEventProducer({
 	return { checkConnection, sendMany, sendOne, shutDown };
 }
 
+/**
+ * Idempotent production is what stops a retried batch from being stored twice.
+ * KafkaJS refuses to start an idempotent producer without acks=-1 ("Not
+ * requiring ack for all messages invalidates the idempotent producer's EoS
+ * guarantees"), and the broker drops the duplicate by producer id and
+ * sequence. Without it, an acknowledgement lost on the way back is retried
+ * and the same events are written twice, because the analytics tables are
+ * plain MergeTree and do not deduplicate.
+ *
+ * The protocol allows five in-flight requests per partition for an idempotent
+ * producer. The per-topic queue in this file does the batching, so the
+ * producer itself never needs more than that.
+ */
+export const KAFKA_PRODUCER_OPTIONS = {
+	acks: -1,
+	allowAutoTopicCreation: true,
+	idempotent: true,
+	maxInFlightRequests: 5,
+} as const;
+
 function createKafkaClients(
 	config: ProducerConfig
 ): { admin: Admin; producer: Producer } | null {
@@ -1115,14 +1135,12 @@ function createKafkaClients(
 			},
 		}),
 		producer: client.producer({
-			allowAutoTopicCreation: true,
+			...KAFKA_PRODUCER_OPTIONS,
 			retry: {
 				initialRetryTime: config.producerRetryDelay,
 				retries: config.maxProducerRetries,
 				maxRetryTime: 3000,
 			},
-			idempotent: false,
-			maxInFlightRequests: 15,
 		}),
 	};
 }
