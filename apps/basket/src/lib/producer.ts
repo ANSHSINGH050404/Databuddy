@@ -779,6 +779,17 @@ export function createEventProducer({
 			queue.bytes = 0;
 		});
 
+	// Releases everything that is still queued so those deliveries take the
+	// direct ClickHouse path instead of failing against a producer that is
+	// about to disconnect.
+	const releaseQueuedSends = Effect.gen(function* () {
+		for (const [topic, queue] of queues) {
+			if (queue.items.length > 0) {
+				yield* abortQueued(topic, queue);
+			}
+		}
+	});
+
 	// One request per topic is in flight at a time; whatever queues meanwhile
 	// becomes the next request, so batches grow with load and stay at one
 	// message when traffic is light.
@@ -1046,6 +1057,12 @@ export function createEventProducer({
 			yield* Effect.sync(() => healthProbe?.beginShutdown());
 			yield* drainInFlight.pipe(
 				Effect.timeout(`${remainingMs()} millis`),
+				Effect.catch((error) => recordFailure("drain", error))
+			);
+			// Whatever is still queued when the drain deadline passes would fail
+			// against a producer that is about to disconnect. Release it so those
+			// events take the direct ClickHouse path instead of being dropped.
+			yield* releaseQueuedSends.pipe(
 				Effect.catch((error) => recordFailure("drain", error))
 			);
 			yield* Effect.all([disconnectProducer, disconnectHealthProbe], {

@@ -753,6 +753,42 @@ describe("shutdown", () => {
 		await inFlight;
 	});
 
+	test("writes the events that were still queued when the drain deadline passes", async () => {
+		const leading = deferred<never[]>();
+		const send = vi
+			.fn()
+			.mockImplementationOnce(() => leading.promise)
+			.mockResolvedValue([]);
+		const insert = vi.fn(() => Promise.resolve());
+		const kafka = fakeKafka({ send });
+		const producer = createProducer({
+			config: { ...withKafka, kafkaTimeout: 5000, shutdownDrainTimeout: 20 },
+			insert,
+			kafka,
+		});
+
+		const stuck = run(producer.sendOne("analytics-events", event("e0")));
+		await vi.waitFor(() => expect(kafka.send).toHaveBeenCalledOnce());
+		const queued = run(producer.sendOne("analytics-events", event("e1")));
+		await new Promise((resolve) => setTimeout(resolve, 5));
+
+		await expect(run(producer.shutDown)).rejects.toMatchObject({
+			_tag: "ShutdownDrainError",
+			retryable: true,
+		});
+
+		await queued;
+		expect(insert).toHaveBeenCalledWith(
+			expect.objectContaining({
+				table: "analytics.events",
+				values: [event("e1")],
+			})
+		);
+
+		leading.resolve([]);
+		await stuck;
+	});
+
 	test("waits for a send acknowledged after its deadline", async () => {
 		const acknowledgement = deferred<[]>();
 		const producer = createProducer({
